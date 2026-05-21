@@ -1,0 +1,13 @@
+from typing import Protocol
+
+from app.modules.levels.domain.entities.level_session import LevelSession
+
+
+class LevelSessionRepository(Protocol):
+    async def create(self, session: LevelSession) -> LevelSession: ...
+
+    async def get_active(self, user_id: str, level_id: str) -> LevelSession | None: ...
+
+    async def get_latest(self, user_id: str, level_id: str) -> LevelSession | None: ...
+
+    async def update(self, session: LevelSession) -> LevelSession: ...

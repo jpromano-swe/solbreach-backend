@@ -1,0 +1,55 @@
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+from app.core.config.settings import get_settings
+from app.core.exceptions.handlers import register_exception_handlers
+from app.core.logging.setup import configure_logging
+from app.core.middleware.request_id import RequestIDMiddleware
+from app.modules.auth.presentation.api.routes import router as auth_router
+from app.modules.certifications.presentation.api.routes import router as certifications_router
+from app.modules.labs.presentation.api.routes import router as labs_router
+from app.modules.levels.presentation.api.routes import router as levels_router
+from app.modules.progress.presentation.api.routes import router as progress_router
+from app.modules.submissions.presentation.api.routes import router as submissions_router
+from app.modules.users.presentation.api.routes import router as users_router
+from app.modules.vulnerabilities.presentation.api.routes import router as vulnerabilities_router
+
+
+def create_app() -> FastAPI:
+    configure_logging()
+    settings = get_settings()
+    app = FastAPI(title=settings.app_name, debug=settings.debug)
+
+    app.add_middleware(RequestIDMiddleware)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.cors_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    register_exception_handlers(app)
+
+    prefix = settings.api_v1_prefix
+    app.include_router(auth_router, prefix=f"{prefix}/auth", tags=["auth"])
+    app.include_router(users_router, prefix=f"{prefix}/users", tags=["users"])
+    app.include_router(
+        vulnerabilities_router, prefix=f"{prefix}/vulnerabilities", tags=["vulnerabilities"]
+    )
+    app.include_router(levels_router, prefix=f"{prefix}/levels", tags=["levels"])
+    app.include_router(submissions_router, prefix=f"{prefix}/submissions", tags=["submissions"])
+    app.include_router(progress_router, prefix=f"{prefix}/progress", tags=["progress"])
+    app.include_router(
+        certifications_router, prefix=f"{prefix}/certifications", tags=["certifications"]
+    )
+    app.include_router(labs_router, prefix=f"{prefix}/labs", tags=["labs"])
+
+    @app.get("/health", tags=["system"])
+    async def health() -> dict[str, str]:
+        return {"status": "ok"}
+
+    return app
+
+
+app = create_app()
