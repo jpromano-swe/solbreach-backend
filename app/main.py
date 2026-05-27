@@ -5,8 +5,12 @@ from app.core.config.settings import get_settings
 from app.core.exceptions.handlers import register_exception_handlers
 from app.core.logging.setup import configure_logging
 from app.core.middleware.request_id import RequestIDMiddleware
+from app.modules.analytics.presentation.api.routes import router as analytics_router
 from app.modules.auth.presentation.api.routes import router as auth_router
 from app.modules.certifications.presentation.api.routes import router as certifications_router
+from app.modules.labs.presentation.api.research_lab_routes import (
+    router as research_labs_router,
+)
 from app.modules.labs.presentation.api.routes import router as labs_router
 from app.modules.levels.presentation.api.routes import router as levels_router
 from app.modules.progress.presentation.api.routes import router as progress_router
@@ -33,6 +37,7 @@ def create_app() -> FastAPI:
 
     prefix = settings.api_v1_prefix
     app.include_router(auth_router, prefix=f"{prefix}/auth", tags=["auth"])
+    app.include_router(analytics_router, prefix=f"{prefix}/analytics", tags=["analytics"])
     app.include_router(users_router, prefix=f"{prefix}/users", tags=["users"])
     app.include_router(
         vulnerabilities_router, prefix=f"{prefix}/vulnerabilities", tags=["vulnerabilities"]
@@ -44,6 +49,9 @@ def create_app() -> FastAPI:
         certifications_router, prefix=f"{prefix}/certifications", tags=["certifications"]
     )
     app.include_router(labs_router, prefix=f"{prefix}/labs", tags=["labs"])
+    app.include_router(
+        research_labs_router, prefix=f"{prefix}/research-labs", tags=["research-labs"]
+    )
 
     @app.get("/health", tags=["system"])
     async def health() -> dict[str, str]:

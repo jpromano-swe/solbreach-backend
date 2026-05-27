@@ -1,0 +1,63 @@
+service: solbreach-backend
+
+frameworkVersion: "3"
+
+provider:
+  name: aws
+  runtime: python3.12
+  region: ${opt:region, env:AWS_REGION, 'us-east-1'}
+  stage: ${env:STAGE, 'dev'}
+  memorySize: 512
+  timeout: 30
+  environment:
+    STAGE: ${self:provider.stage}
+    ENVIRONMENT: ${self:provider.stage}
+    DATABASE_URL: ${env:DATABASE_URL, ''}
+    JWT_SECRET_KEY: ${env:JWT_SECRET_KEY, ''}
+    CORS_ALLOWED_ORIGINS: ${env:CORS_ALLOWED_ORIGINS, ''}
+    SOLANA_DEVNET_RPC_URL: ${env:SOLANA_DEVNET_RPC_URL, ''}
+    RESEARCH_LAB_TEMPLATE_ROOT: ${env:RESEARCH_LAB_TEMPLATE_ROOT, ''}
+    RESEARCH_LAB_WORKSPACE_ROOT: ${env:RESEARCH_LAB_WORKSPACE_ROOT, '/tmp/solbreach_research_labs'}
+    RESEARCH_LAB_SESSION_TTL_HOURS: ${env:RESEARCH_LAB_SESSION_TTL_HOURS, '4'}
+    RESEARCH_LAB_TEST_TIMEOUT_SECONDS: ${env:RESEARCH_LAB_TEST_TIMEOUT_SECONDS, '120'}
+    RESEARCH_LAB_MAX_FILE_SIZE_BYTES: ${env:RESEARCH_LAB_MAX_FILE_SIZE_BYTES, '100000'}
+  apiGateway:
+    binaryMediaTypes:
+      - "multipart/form-data"
+      - "application/json"
+  logRetentionInDays: 14
+  tracing:
+    apiGateway: true
+    lambda: true
+
+package:
+  individually: true
+  exclude:
+    - "**/*.pyc"
+    - "**/__pycache__/**"
+    - "**/.git/**"
+    - "**/tests/**"
+    - "**/test_*.py"
+    - "**/*_test.py"
+    - ".gitignore"
+    - ".env*"
+    - "*.md"
+    - "docs/**"
+    - "lab_templates/**"
+    - "alembic/versions/**"
+    - "scripts/**"
+
+functions:
+  api:
+    handler: lambda_handler.handler
+    events:
+      - http:
+          path: /{proxy+}
+          method: ANY
+      - http:
+          path: /
+          method: ANY
+    layers:
+      - ${env:PYTHON_LAYER_ARN, ''}
+    runtime: python3.12
+    architecture: x86_64

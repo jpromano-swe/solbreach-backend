@@ -7,12 +7,28 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///:memory:"
 os.environ["JWT_SECRET_KEY"] = "test-secret-with-at-least-32-bytes"
+os.environ["SOLBREACH_ADMIN_PASSWORD"] = "admin-password"
 
 from app.core.database.base import Base  # noqa: E402
 from app.core.database.models import *  # noqa: F403,E402
 from app.core.database.session import get_db_session  # noqa: E402
+from app.core.dependencies.blockchain import get_blockchain_client  # noqa: E402
 from app.main import create_app  # noqa: E402
 from app.scripts.seed_dev_data import seed_development_data  # noqa: E402
+from app.shared.blockchain import BlockchainTransaction  # noqa: E402
+
+FAKE_BLOCKCHAIN_TRANSACTIONS: dict[str, BlockchainTransaction] = {}
+
+
+class FakeBlockchainClient:
+    async def get_transaction(self, signature: str) -> BlockchainTransaction | None:
+        return FAKE_BLOCKCHAIN_TRANSACTIONS.get(signature)
+
+
+@pytest.fixture()
+def fake_blockchain() -> dict[str, BlockchainTransaction]:
+    FAKE_BLOCKCHAIN_TRANSACTIONS.clear()
+    return FAKE_BLOCKCHAIN_TRANSACTIONS
 
 
 @pytest.fixture()
@@ -43,6 +59,7 @@ async def _build_client(seed: bool) -> AsyncGenerator[AsyncClient, None]:
 
     app = create_app()
     app.dependency_overrides[get_db_session] = override_session
+    app.dependency_overrides[get_blockchain_client] = lambda: FakeBlockchainClient()
 
     async with AsyncClient(
         transport=ASGITransport(app=app),

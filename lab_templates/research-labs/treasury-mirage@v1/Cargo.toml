@@ -1,0 +1,9 @@
+[package]
+name = "treasury_mirage_lab"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "programs/treasury_mirage/src/lib.rs"
+
+[dependencies]

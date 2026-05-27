@@ -27,3 +27,20 @@ class TokenResponse(BaseModel):
 class AuthResponse(BaseModel):
     user: UserResponse
     tokens: TokenResponse
+
+
+class WalletNonceRequest(BaseModel):
+    wallet_address: str = Field(min_length=32, max_length=64)
+
+
+class WalletNonceResponse(BaseModel):
+    wallet_address: str
+    nonce: str
+    message: str
+    expires_at: str
+
+
+class WalletVerifyRequest(BaseModel):
+    wallet_address: str = Field(min_length=32, max_length=64)
+    nonce: str = Field(min_length=16, max_length=128)
+    signature: str = Field(min_length=64, max_length=256)

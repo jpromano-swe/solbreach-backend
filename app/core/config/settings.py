@@ -1,8 +1,8 @@
 from functools import lru_cache
-from typing import Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import Field
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field, field_validator, model_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -23,13 +23,58 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 30
     refresh_token_expire_minutes: int = 60 * 24 * 14
 
-    cors_origins: list[str] = ["http://localhost:3000", "http://localhost:5173"]
+    cors_origins: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: [
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+            "http://localhost:5173",
+            "https://solbreach.vercel.app",
+        ],
+        validation_alias="CORS_ALLOWED_ORIGINS",
+    )
+    solana_devnet_rpc_url: str = Field(
+        default="https://api.devnet.solana.com",
+        validation_alias="SOLANA_DEVNET_RPC_URL",
+    )
+    research_lab_template_root: str = Field(
+        default="lab_templates",
+        validation_alias="RESEARCH_LAB_TEMPLATE_ROOT",
+    )
+    research_lab_workspace_root: str = Field(
+        default="/tmp/solbreach_research_labs",
+        validation_alias="RESEARCH_LAB_WORKSPACE_ROOT",
+    )
+    research_lab_session_ttl_hours: int = Field(
+        default=4,
+        validation_alias="RESEARCH_LAB_SESSION_TTL_HOURS",
+    )
+    research_lab_test_timeout_seconds: int = Field(
+        default=120,
+        validation_alias="RESEARCH_LAB_TEST_TIMEOUT_SECONDS",
+    )
+    research_lab_max_file_size_bytes: int = Field(
+        default=100_000,
+        validation_alias="RESEARCH_LAB_MAX_FILE_SIZE_BYTES",
+    )
 
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
     )
+
+    @field_validator("cors_origins", mode="before")
+    @classmethod
+    def parse_cors_origins(cls, value: Any) -> list[str] | Any:
+        if isinstance(value, str):
+            return [origin.strip() for origin in value.split(",") if origin.strip()]
+        return value
+
+    @model_validator(mode="after")
+    def validate_production_cors(self) -> "Settings":
+        if self.environment == "production" and "*" in self.cors_origins:
+            raise ValueError("CORS wildcard origins are not allowed in production")
+        return self
 
 
 @lru_cache

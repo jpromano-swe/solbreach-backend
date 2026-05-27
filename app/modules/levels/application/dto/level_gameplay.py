@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import Any
 
 from app.modules.certifications.domain.entities.certification import Certification
 from app.modules.levels.domain.entities.level import Level
@@ -32,3 +33,11 @@ class LevelSubmitResult:
     progress: Progress | None
     unlocked_next_level_id: str | None
     certification: Certification | None
+
+
+@dataclass(frozen=True, slots=True)
+class LevelSetupResult:
+    level: Level
+    session: LevelSession
+    challenge: dict[str, Any]
+    exploit_status: str

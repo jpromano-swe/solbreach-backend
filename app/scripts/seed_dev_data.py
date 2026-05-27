@@ -1,12 +1,16 @@
 import asyncio
+import os
 from uuid import NAMESPACE_URL, uuid5
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database.session import AsyncSessionLocal
+from app.core.security.password import PasswordHasher
 from app.modules.levels.domain.entities.level import LevelStage
 from app.modules.levels.infrastructure.database.models import LevelModel
+from app.modules.users.domain.entities.user import UserRole
+from app.modules.users.infrastructure.database.models import UserModel
 from app.modules.vulnerabilities.infrastructure.database.models import VulnerabilityModel
 
 VULNERABILITIES = [
@@ -42,16 +46,24 @@ VULNERABILITIES = [
         "description": "Validate transaction and account outcomes from an unchecked CPI exploit.",
         "tags": ["cpi", "transaction", "accounts"],
     },
+    {
+        "slug": "advanced_bounty_drainer",
+        "title": "Advanced Bounty Drainer",
+        "category": "cpi",
+        "difficulty": "hard",
+        "description": "Placeholder vulnerability for the post-Level 3 continuation path.",
+        "tags": ["cpi", "advanced", "placeholder"],
+    },
 ]
 
 
 LEVELS = [
     {
         "slug": "level-1-fake-mint",
-        "title": "Level 1: Fake Mint",
+        "title": "Level 1: The Illusionist",
         "description": (
-            "Exploit weak mint validation and prove the attacker received tokens from "
-            "the protected vault."
+            "Exploit a fake mint path where counterfeit token accounts and vault substitution "
+            "hide the attacker-controlled asset behind a trusted-looking flow."
         ),
         "order": 1,
         "vulnerability_slug": "fake_mint",
@@ -60,119 +72,231 @@ LEVELS = [
         "xp_reward": 100,
         "objectives": [
             "Identify the missing mint authenticity check.",
-            "Execute the exploit locally or on devnet.",
-            "Submit deterministic token balance proof.",
+            "Prepare the deterministic devnet challenge state.",
+            "Execute the wallet-signed exploit transaction.",
+            "Submit the transaction signature for deterministic verification.",
         ],
         "instructions": (
-            "Use the provided starter flow with the demo wallet. The backend will only "
-            "verify the submitted deterministic outcome; it will not execute your code."
+            "Connect a wallet, start the level, run setup, sign the exploit transaction on "
+            "devnet, and submit the resulting transaction signature. The backend prepares "
+            "challenge metadata and verifies outcomes; it never signs or submits for you."
         ),
         "verification_requirements": [
-            "A known successful demo transaction signature.",
-            "attacker_token_delta must equal 1000.",
-            "vault_delta must equal -1000.",
+            "Transaction must exist and succeed on Solana devnet.",
+            "Connected wallet must be a signer.",
+            "Transaction must include the session-bound challenge accounts.",
+            "Level session and wallet must match the setup context.",
+            "Transaction signature must not have been used before.",
         ],
         "resources": [{"label": "Starter repo", "url": "https://example.com/solbreach/level-1"}],
         "verification_config": {
             "checks": [
+                {"type": "session_binding"},
+                {"type": "replay_protection"},
                 {
                     "type": "transaction_signature",
                     "require_success": True,
-                    "expected_signature": "demo-signature-level-1-abcdef",
                 },
                 {
-                    "type": "token_balance",
-                    "expected": {"attacker_token_delta": 1000, "vault_delta": -1000},
+                    "type": "solana_transaction",
+                    "require_success": True,
+                    "require_wallet_signer": True,
+                    "require_challenge_accounts": True,
                 },
             ]
         },
         "example_proof": {
             "transaction_signature": "demo-signature-level-1-abcdef",
             "transaction_succeeded": True,
-            "token_balances": {"attacker_token_delta": 1000, "vault_delta": -1000},
         },
         "demo_wallet": "DemoWallet111111111111111111111111111111111",
         "demo_accounts": {
             "fake_mint": "FakeMint11111111111111111111111111111111111",
             "vault": "Vault111111111111111111111111111111111111",
         },
+        "execution": {
+            "enabled": True,
+            "mode": "wallet_signed_demo_transaction",
+            "network": "devnet",
+            "program_id": "11111111111111111111111111111111",
+            "demo_mode": True,
+        },
     },
     {
         "slug": "level-2-authority-spoofing",
-        "title": "Level 2: Authority Spoofing",
-        "description": "Prove the expected authority transition occurred.",
+        "title": "Level 2: Static PDA Commander",
+        "description": (
+            "Exploit an authority path that trusts a static commander PDA and prove the "
+            "wallet-signed transaction includes the intended hijack accounts."
+        ),
         "order": 2,
         "vulnerability_slug": "authority_spoofing",
         "vulnerability_category": "authority",
         "difficulty": "medium",
         "xp_reward": 250,
         "objectives": [
-            "Inspect the trusted authority path.",
-            "Demonstrate the spoofed authority transition.",
+            "Inspect the static PDA commander trust path.",
+            "Prepare the deterministic commander hijack challenge state.",
+            "Execute the wallet-signed devnet proof transaction.",
+            "Submit the transaction signature for deterministic verification.",
         ],
-        "instructions": "Exploit the authority check and submit the resulting authority state.",
+        "instructions": (
+            "Start Level 2, run setup with the connected wallet, build a devnet transaction "
+            "that includes every commander challenge account, sign with the wallet, and submit "
+            "the resulting signature. The backend verifies the transaction and session context; "
+            "it does not sign or submit anything for you."
+        ),
         "verification_requirements": [
-            "A successful transaction signature.",
-            "new_authority must equal attacker.",
-            "owner_changed must be true.",
+            "Transaction must exist and succeed on Solana devnet.",
+            "Connected wallet must be a signer.",
+            "Transaction must include the session-bound commander challenge accounts.",
+            "Level session and wallet must match the setup context.",
+            "Transaction signature must not have been used before.",
         ],
         "resources": [{"label": "Starter repo", "url": "https://example.com/solbreach/level-2"}],
         "verification_config": {
             "checks": [
-                {"type": "transaction_signature", "require_success": True},
+                {"type": "session_binding"},
+                {"type": "replay_protection"},
                 {
-                    "type": "authority",
-                    "expected": {"new_authority": "attacker", "owner_changed": True},
+                    "type": "transaction_signature",
+                    "require_success": True,
+                },
+                {
+                    "type": "solana_transaction",
+                    "require_success": True,
+                    "require_wallet_signer": True,
+                    "require_challenge_accounts": True,
+                },
+                {
+                    "type": "pda_commander_hijack",
+                    "required_account_labels": [
+                        "commander_registry_pda",
+                        "trusted_commander_pda",
+                        "hijacked_commander_pda",
+                        "authority_record_pda",
+                        "wallet_address",
+                    ],
                 },
             ]
         },
         "example_proof": {
             "transaction_signature": "demo-signature-level-2-abcdef",
             "transaction_succeeded": True,
-            "authority": {"new_authority": "attacker", "owner_changed": True},
         },
         "demo_wallet": "DemoWallet111111111111111111111111111111111",
         "demo_accounts": {
             "target": "AuthorityTarget111111111111111111111111111",
         },
+        "execution": {
+            "enabled": True,
+            "mode": "wallet_signed_demo_transaction",
+            "challenge_type": "static_pda_commander_hijack",
+            "network": "devnet",
+            "program_id": "11111111111111111111111111111111",
+            "demo_mode": True,
+        },
     },
     {
         "slug": "level-3-unchecked-cpi",
-        "title": "Level 3: Unchecked CPI",
+        "title": "Level 3: The Trojan Horse",
         "description": (
-            "Prove the unchecked CPI produced the expected transaction and account outcome."
+            "Exploit an arbitrary CPI target path where delegated signer authority is "
+            "forwarded into an attacker-controlled CPI target."
         ),
         "order": 3,
         "vulnerability_slug": "unchecked_cpi",
         "vulnerability_category": "cpi",
         "difficulty": "medium",
-        "xp_reward": 250,
+        "xp_reward": 300,
         "objectives": [
-            "Trigger the unchecked CPI path.",
-            "Prove the target account was modified.",
+            "Identify the attacker-controlled CPI target.",
+            "Trace the forwarded guild signer authority.",
+            "Map the bounty vault and player reward account path.",
+            "Submit a wallet-signed devnet proof transaction with the Level 3 account set.",
         ],
-        "instructions": "Exploit the unchecked CPI path and submit transaction plus PDA proof.",
+        "instructions": (
+            "Use the local observe/manipulate flow to reconstruct the delegated-CPI exploit "
+            "sequence, then run setup, sign a deterministic devnet transaction that includes "
+            "the Level 3 exploit accounts, and submit the resulting signature."
+        ),
         "verification_requirements": [
-            "A successful transaction signature.",
-            "cpi_executed must be true.",
-            "target_modified must be true.",
+            "Transaction must exist and succeed on Solana devnet.",
+            "Connected wallet must be a signer.",
+            "Transaction must include the Level 3 delegated-CPI challenge accounts.",
+            "Level session and wallet must match the setup context.",
+            "Transaction signature must not have been used before.",
         ],
         "resources": [{"label": "Starter repo", "url": "https://example.com/solbreach/level-3"}],
         "verification_config": {
             "checks": [
-                {"type": "transaction_signature", "require_success": True},
-                {"type": "pda_state", "expected": {"cpi_executed": True, "target_modified": True}},
+                {"type": "session_binding"},
+                {"type": "replay_protection"},
+                {
+                    "type": "transaction_signature",
+                    "require_success": True,
+                },
+                {
+                    "type": "solana_transaction",
+                    "require_success": True,
+                    "require_wallet_signer": True,
+                    "require_challenge_accounts": True,
+                },
+                {
+                    "type": "delegated_cpi_exploit",
+                    "expected_sequence": ["target", "signer", "vault", "reward"],
+                    "required_account_labels": [
+                        "wallet_address",
+                        "guild_authority_pda",
+                        "level3_state_pda",
+                        "bounty_vault_pda",
+                        "trusted_cpi_program",
+                        "attacker_cpi_program",
+                        "player_reward_account",
+                        "authority_record_pda",
+                    ],
+                },
             ]
         },
         "example_proof": {
             "transaction_signature": "demo-signature-level-3-abcdef",
             "transaction_succeeded": True,
-            "pda_state": {"cpi_executed": True, "target_modified": True},
         },
         "demo_wallet": "DemoWallet111111111111111111111111111111111",
         "demo_accounts": {
             "target": "UncheckedCpiTarget111111111111111111111111",
         },
+        "execution": {
+            "enabled": True,
+            "mode": "wallet_signed_demo_transaction",
+            "challenge_type": "arbitrary_cpi_delegated_signer_abuse",
+            "network": "devnet",
+            "program_id": "11111111111111111111111111111111",
+            "demo_mode": True,
+        },
+    },
+    {
+        "slug": "level-4-advanced-bounty-drainer",
+        "title": "Level 4: Advanced Bounty Drainer",
+        "description": "Post-demo continuation level placeholder unlocked after Level 3.",
+        "order": 4,
+        "vulnerability_slug": "advanced_bounty_drainer",
+        "vulnerability_category": "cpi",
+        "difficulty": "hard",
+        "xp_reward": 500,
+        "objectives": [
+            "Continue the advanced CPI exploitation path.",
+        ],
+        "instructions": "This level is reserved for the next playable slice.",
+        "verification_requirements": [
+            "Coming soon.",
+        ],
+        "resources": [],
+        "verification_config": {"checks": []},
+        "example_proof": {},
+        "demo_wallet": "DemoWallet111111111111111111111111111111111",
+        "demo_accounts": {},
+        "execution": {"enabled": False},
     },
 ]
 
@@ -182,6 +306,7 @@ def stable_id(slug: str) -> str:
 
 
 async def seed_development_data(session: AsyncSession) -> None:
+    await seed_admin_user(session)
     vulnerability_ids: dict[str, str] = {}
     for item in VULNERABILITIES:
         existing = await session.scalar(
@@ -224,6 +349,7 @@ async def seed_development_data(session: AsyncSession) -> None:
                 "example_proof": item["example_proof"],
                 "demo_wallet": item["demo_wallet"],
                 "demo_accounts": item["demo_accounts"],
+                "execution": item.get("execution", {"enabled": False}),
             },
             "xp_reward": item["xp_reward"],
             "is_active": True,
@@ -239,6 +365,42 @@ async def seed_development_data(session: AsyncSession) -> None:
                 if key != "id":
                     setattr(existing, key, value)
     await session.commit()
+
+
+async def seed_admin_user(session: AsyncSession) -> None:
+    password = os.getenv("SOLBREACH_ADMIN_PASSWORD")
+    if not password:
+        return
+
+    username = os.getenv("SOLBREACH_ADMIN_USERNAME", "solbreach_admin")
+    email = os.getenv("SOLBREACH_ADMIN_EMAIL", "admin@solbreach.app")
+    existing = await session.scalar(select(UserModel).where(UserModel.email == email))
+    password_hash = PasswordHasher().hash(password)
+
+    if existing is None:
+        session.add(
+            UserModel(
+                id=stable_id(f"user:{email}"),
+                username=username,
+                email=email,
+                hashed_password=password_hash,
+                role=UserRole.ADMIN.value,
+                wallet_address=None,
+                bio=None,
+                avatar=None,
+                xp=0,
+                reputation_score=0,
+                completed_levels=0,
+            )
+        )
+        await session.flush()
+        return
+
+    existing.username = username
+    existing.hashed_password = password_hash
+    existing.role = UserRole.ADMIN.value
+    existing.deleted_at = None
+    await session.flush()
 
 
 async def main() -> None:

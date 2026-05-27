@@ -3,6 +3,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database.session import get_db_session
 from app.core.dependencies.auth import get_current_user, require_roles
+from app.core.dependencies.blockchain import get_blockchain_client
+from app.modules.analytics.infrastructure.repositories.sqlalchemy_analytics_repository import (
+    SQLAlchemyAnalyticsRepository,
+)
 from app.modules.certifications.infrastructure.repositories import (
     sqlalchemy_certification_repository,
 )
@@ -11,6 +15,7 @@ from app.modules.levels.application.use_cases.create_level import CreateLevelUse
 from app.modules.levels.application.use_cases.get_level import GetLevelUseCase
 from app.modules.levels.application.use_cases.get_level_status import GetLevelStatusUseCase
 from app.modules.levels.application.use_cases.list_levels import ListLevelsUseCase
+from app.modules.levels.application.use_cases.setup_level import SetupLevelUseCase
 from app.modules.levels.application.use_cases.start_level import StartLevelUseCase
 from app.modules.levels.application.use_cases.submit_level import SubmitLevelUseCase
 from app.modules.levels.domain.entities.level import Level
@@ -24,8 +29,11 @@ from app.modules.levels.infrastructure.repositories.sqlalchemy_level_session_rep
 )
 from app.modules.levels.presentation.schemas.level import (
     LevelCreateRequest,
+    LevelExecutionMetadata,
     LevelResponse,
     LevelSessionResponse,
+    LevelSetupRequest,
+    LevelSetupResponse,
     LevelStartResponse,
     LevelStatusResponse,
     LevelSubmitErrorData,
@@ -46,10 +54,39 @@ from app.modules.users.domain.entities.user import User, UserRole
 from app.modules.users.infrastructure.repositories.sqlalchemy_user_repository import (
     SQLAlchemyUserRepository,
 )
+from app.shared.blockchain import BlockchainClientInterface
 from app.shared.events.event_bus import InMemoryEventPublisher
 from app.shared.schemas.pagination import PageParams
 
 router = APIRouter()
+
+AUTH_ERROR_EXAMPLE = {
+    "error": {
+        "code": "UNAUTHORIZED",
+        "message": "Missing bearer token",
+    }
+}
+
+LEVEL_LOCKED_EXAMPLE = {
+    "error": {
+        "code": "LEVEL_LOCKED",
+        "message": "Complete the previous level before starting this one",
+    }
+}
+
+LEVEL_NOT_STARTED_EXAMPLE = {
+    "error": {
+        "code": "LEVEL_NOT_STARTED",
+        "message": "Start the level before setup",
+    }
+}
+
+INVALID_SUBMISSION_EXAMPLE = {
+    "error": {
+        "code": "INVALID_SUBMISSION",
+        "message": "Transaction signature was already submitted",
+    }
+}
 
 
 def _level_response(level: Level) -> LevelResponse:
@@ -58,6 +95,19 @@ def _level_response(level: Level) -> LevelResponse:
 
 def _session_response(session: LevelSession) -> LevelSessionResponse:
     return LevelSessionResponse.model_validate(session, from_attributes=True)
+
+
+def _execution_metadata(level: Level) -> LevelExecutionMetadata | None:
+    execution = level.deployment_info.get("execution") or {}
+    if execution.get("enabled") is not True:
+        return None
+    return LevelExecutionMetadata(
+        setup_required=True,
+        network=str(execution.get("network", "devnet")),
+        setup_endpoint=f"/api/v1/levels/{level.id}/setup",
+        submit_proof_fields=["transaction_signature", "wallet_address", "level_session_id"],
+        execution_mode=str(execution.get("mode", "wallet_signed_demo_transaction")),
+    )
 
 
 @router.get(
@@ -132,9 +182,20 @@ async def create_level(
     status_code=status.HTTP_201_CREATED,
     summary="Start or resume a level",
     description=(
-        "Creates a level session for the authenticated user. If the user already has an "
-        "in-progress session, that session is returned."
+        "Creates or resumes a gameplay session for the authenticated user. "
+        "For executable levels, the response includes frontend execution metadata "
+        "such as devnet network, setup endpoint, and proof fields."
     ),
+    responses={
+        401: {
+            "description": "Missing or invalid bearer token",
+            "content": {"application/json": {"example": AUTH_ERROR_EXAMPLE}},
+        },
+        403: {
+            "description": "Level is locked by sequential progression",
+            "content": {"application/json": {"example": LEVEL_LOCKED_EXAMPLE}},
+        },
+    },
 )
 async def start_level(
     level_id: str,
@@ -150,10 +211,69 @@ async def start_level(
         InMemoryEventPublisher(),
     ).execute(current_user.id, level_id)
     await session.commit()
+    await SQLAlchemyAnalyticsRepository(session).record(
+        event_type="level_started",
+        user_id=current_user.id,
+        wallet_address=current_user.wallet_address,
+        subject_type="level",
+        subject_id=level_id,
+        metadata={"session_id": result.session.id, "level_slug": result.level.slug},
+    )
+    await session.commit()
     return LevelStartResponse(
         level=_level_response(result.level),
         state=result.state.value,
         session=_session_response(result.session),
+        execution=_execution_metadata(result.level),
+    )
+
+
+@router.post(
+    "/{level_id}/setup",
+    response_model=LevelSetupResponse,
+    summary="Prepare executable level exploit setup",
+    description=(
+        "Binds the active level session to the player's wallet and returns deterministic "
+        "devnet challenge accounts. The backend does not sign or submit transactions."
+    ),
+    responses={
+        401: {
+            "description": "Missing or invalid bearer token",
+            "content": {"application/json": {"example": AUTH_ERROR_EXAMPLE}},
+        },
+        409: {
+            "description": "Level has not been started or session is bound to another wallet",
+            "content": {"application/json": {"example": LEVEL_NOT_STARTED_EXAMPLE}},
+        },
+    },
+)
+async def setup_level(
+    level_id: str,
+    payload: LevelSetupRequest,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> LevelSetupResponse:
+    levels = SQLAlchemyLevelRepository(session)
+    progress = SQLAlchemyProgressRepository(session)
+    result = await SetupLevelUseCase(
+        levels,
+        SQLAlchemyLevelSessionRepository(session),
+        LevelAccessService(levels, progress),
+    ).execute(current_user, level_id, payload.wallet_address)
+    await SQLAlchemyAnalyticsRepository(session).record(
+        event_type="level_setup_ready",
+        user_id=current_user.id,
+        wallet_address=payload.wallet_address,
+        subject_type="level",
+        subject_id=level_id,
+        metadata={"session_id": result.session.id, "level_slug": result.level.slug},
+    )
+    await session.commit()
+    return LevelSetupResponse(
+        level_id=result.level.id,
+        level_session_id=result.session.id,
+        exploit_status=result.exploit_status,
+        challenge=result.challenge,
     )
 
 
@@ -161,7 +281,16 @@ async def start_level(
     "/{level_id}/status",
     response_model=LevelStatusResponse,
     summary="Get current level state",
-    description="Returns LOCKED, AVAILABLE, IN_PROGRESS, COMPLETED, or FAILED for the user.",
+    description=(
+        "Returns the current gameplay and exploit state for this user, including "
+        "submission history, XP earned, unlock status, and session-bound challenge context."
+    ),
+    responses={
+        401: {
+            "description": "Missing or invalid bearer token",
+            "content": {"application/json": {"example": AUTH_ERROR_EXAMPLE}},
+        }
+    },
 )
 async def get_level_status(
     level_id: str,
@@ -196,6 +325,8 @@ async def get_level_status(
         xp_awarded=result.progress.xp_awarded if result.progress else 0,
         xp_earned=result.progress.xp_awarded if result.progress else 0,
         next_level_id=result.next_level_id,
+        exploit_status=result.session.exploit_status.value if result.session else None,
+        challenge_context=result.session.challenge_context if result.session else {},
     )
 
 
@@ -204,23 +335,27 @@ async def get_level_status(
     response_model=LevelSubmitResponse,
     summary="Submit deterministic exploit proof",
     description=(
-        "Verifies a user-submitted exploit proof against the level verification config. "
-        "The backend validates deterministic outcomes only; it does not execute user code."
+        "Verifies a wallet-signed devnet transaction. The backend fetches the "
+        "transaction by signature, checks session and wallet binding, prevents replay, "
+        "validates required challenge accounts, then updates progression."
     ),
     responses={
+        401: {
+            "description": "Missing or invalid bearer token",
+            "content": {"application/json": {"example": AUTH_ERROR_EXAMPLE}},
+        },
         403: {
-            "description": "Invalid submission or locked level",
+            "description": "Invalid submission, locked level, or reused transaction signature",
             "content": {
                 "application/json": {
-                    "example": {
-                        "error": {
-                            "code": "INVALID_SUBMISSION",
-                            "message": "Verification failed",
-                        }
-                    }
+                    "example": INVALID_SUBMISSION_EXAMPLE
                 }
             },
-        }
+        },
+        409: {
+            "description": "Level not started or setup required",
+            "content": {"application/json": {"example": LEVEL_NOT_STARTED_EXAMPLE}},
+        },
     },
 )
 async def submit_level(
@@ -228,6 +363,7 @@ async def submit_level(
     payload: LevelSubmitRequest,
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_db_session),
+    blockchain: BlockchainClientInterface = Depends(get_blockchain_client),
 ) -> LevelSubmitResponse:
     levels = SQLAlchemyLevelRepository(session)
     progress = SQLAlchemyProgressRepository(session)
@@ -243,7 +379,24 @@ async def submit_level(
         access=LevelAccessService(levels, progress),
         verification=VerificationEngine(),
         events=InMemoryEventPublisher(),
-    ).execute(current_user.id, level_id, payload.proof)
+        blockchain=blockchain,
+    ).execute(current_user.id, level_id, payload.to_proof())
+    await SQLAlchemyAnalyticsRepository(session).record(
+        event_type=(
+            "level_submission_verified"
+            if result.submission.status.value == "verified"
+            else "level_submission_rejected"
+        ),
+        user_id=current_user.id,
+        wallet_address=result.submission.wallet_address,
+        subject_type="level",
+        subject_id=level_id,
+        metadata={
+            "session_id": result.session.id,
+            "submission_id": result.submission.id,
+            "level_slug": result.level.slug,
+        },
+    )
     await session.commit()
     submission = SubmissionResponse.model_validate(result.submission, from_attributes=True)
     if result.submission.status.value == "rejected":

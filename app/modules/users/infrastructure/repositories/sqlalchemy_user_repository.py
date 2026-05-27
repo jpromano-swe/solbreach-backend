@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -45,6 +47,16 @@ class SQLAlchemyUserRepository(UserRepository):
     async def get_by_username(self, username: str) -> User | None:
         result = await self._session.execute(
             select(UserModel).where(UserModel.username == username, UserModel.deleted_at.is_(None))
+        )
+        model = result.scalar_one_or_none()
+        return self._to_entity(model) if model else None
+
+    async def get_by_wallet_address(self, wallet_address: str) -> User | None:
+        result = await self._session.execute(
+            select(UserModel).where(
+                UserModel.wallet_address == wallet_address,
+                UserModel.deleted_at.is_(None),
+            )
         )
         model = result.scalar_one_or_none()
         return self._to_entity(model) if model else None

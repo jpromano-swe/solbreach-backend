@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from typing import Protocol
 
 from app.modules.users.domain.entities.user import User
@@ -11,6 +13,8 @@ class UserRepository(Protocol):
     async def get_by_email(self, email: str) -> User | None: ...
 
     async def get_by_username(self, username: str) -> User | None: ...
+
+    async def get_by_wallet_address(self, wallet_address: str) -> User | None: ...
 
     async def list(self, limit: int, offset: int) -> list[User]: ...
 

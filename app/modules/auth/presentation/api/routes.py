@@ -5,15 +5,25 @@ from app.core.database.session import get_db_session
 from app.core.dependencies.auth import get_current_user
 from app.core.security.jwt import JWTService
 from app.core.security.password import PasswordHasher
+from app.modules.analytics.infrastructure.repositories.sqlalchemy_analytics_repository import (
+    SQLAlchemyAnalyticsRepository,
+)
 from app.modules.auth.application.use_cases.login_user import LoginUserUseCase
 from app.modules.auth.application.use_cases.refresh_token import RefreshTokenUseCase
 from app.modules.auth.application.use_cases.register_user import RegisterUserUseCase
+from app.modules.auth.application.use_cases.wallet_auth import WalletAuthUseCase
+from app.modules.auth.infrastructure.repositories.sqlalchemy_wallet_nonce_repository import (
+    SQLAlchemyWalletNonceRepository,
+)
 from app.modules.auth.presentation.schemas.auth import (
     AuthResponse,
     LoginRequest,
     RefreshRequest,
     RegisterRequest,
     TokenResponse,
+    WalletNonceRequest,
+    WalletNonceResponse,
+    WalletVerifyRequest,
 )
 from app.modules.users.domain.entities.user import User
 from app.modules.users.infrastructure.repositories.sqlalchemy_user_repository import (
@@ -69,3 +79,62 @@ async def refresh(
 @router.get("/me", response_model=UserResponse)
 async def me(current_user: User = Depends(get_current_user)) -> UserResponse:
     return _user_response(current_user)
+
+
+@router.post("/wallet/nonce", response_model=WalletNonceResponse)
+async def wallet_nonce(
+    payload: WalletNonceRequest, session: AsyncSession = Depends(get_db_session)
+) -> WalletNonceResponse:
+    use_case = WalletAuthUseCase(
+        SQLAlchemyUserRepository(session),
+        SQLAlchemyWalletNonceRepository(session),
+        SQLAlchemyAnalyticsRepository(session),
+        JWTService(),
+        PasswordHasher(),
+    )
+    data = await use_case.create_nonce(payload.wallet_address)
+    await session.commit()
+    return WalletNonceResponse(**data)
+
+
+@router.post("/wallet/verify", response_model=AuthResponse)
+async def wallet_verify(
+    payload: WalletVerifyRequest, session: AsyncSession = Depends(get_db_session)
+) -> AuthResponse:
+    use_case = WalletAuthUseCase(
+        SQLAlchemyUserRepository(session),
+        SQLAlchemyWalletNonceRepository(session),
+        SQLAlchemyAnalyticsRepository(session),
+        JWTService(),
+        PasswordHasher(),
+    )
+    user, tokens = await use_case.verify_wallet_login(
+        wallet_address=payload.wallet_address,
+        nonce=payload.nonce,
+        signature=payload.signature,
+    )
+    await session.commit()
+    return AuthResponse(user=_user_response(user), tokens=_token_response(tokens))
+
+
+@router.post("/wallet/link", response_model=UserResponse)
+async def wallet_link(
+    payload: WalletVerifyRequest,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> UserResponse:
+    use_case = WalletAuthUseCase(
+        SQLAlchemyUserRepository(session),
+        SQLAlchemyWalletNonceRepository(session),
+        SQLAlchemyAnalyticsRepository(session),
+        JWTService(),
+        PasswordHasher(),
+    )
+    user = await use_case.link_wallet(
+        user=current_user,
+        wallet_address=payload.wallet_address,
+        nonce=payload.nonce,
+        signature=payload.signature,
+    )
+    await session.commit()
+    return _user_response(user)

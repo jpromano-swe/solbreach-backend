@@ -40,6 +40,48 @@ class VerificationStrategy(Protocol):
     ) -> VerificationCheckResult: ...
 
 
+class SessionBindingStrategy:
+    name = "session_binding"
+
+    def verify(self, config: dict[str, Any], payload: dict[str, Any]) -> VerificationCheckResult:
+        expected_session_id = config.get("expected_session_id")
+        expected_wallet_address = config.get("expected_wallet_address")
+        session_id = payload.get("level_session_id")
+        wallet_address = payload.get("wallet_address")
+        if expected_session_id and session_id != expected_session_id:
+            return VerificationCheckResult(
+                self.name,
+                False,
+                "Submission is not tied to the active level session",
+                {"expected_session_id": expected_session_id, "actual_session_id": session_id},
+            )
+        if expected_wallet_address and wallet_address != expected_wallet_address:
+            return VerificationCheckResult(
+                self.name,
+                False,
+                "Submission wallet does not match setup wallet",
+                {
+                    "expected_wallet_address": expected_wallet_address,
+                    "actual_wallet_address": wallet_address,
+                },
+            )
+        return VerificationCheckResult(self.name, True, "Session binding accepted")
+
+
+class ReplayProtectionStrategy:
+    name = "replay_protection"
+
+    def verify(self, config: dict[str, Any], payload: dict[str, Any]) -> VerificationCheckResult:
+        if payload.get("tx_signature_reused") is True:
+            return VerificationCheckResult(
+                self.name,
+                False,
+                "Transaction signature was already submitted",
+                {"transaction_signature": payload.get("transaction_signature")},
+            )
+        return VerificationCheckResult(self.name, True, "Transaction signature is unique")
+
+
 class TransactionSignatureStrategy:
     name = "transaction_signature"
 
@@ -57,6 +99,58 @@ class TransactionSignatureStrategy:
                 self.name, False, "Transaction was not marked successful"
             )
         return VerificationCheckResult(self.name, True, "Transaction proof accepted")
+
+
+class SolanaTransactionStrategy:
+    name = "solana_transaction"
+
+    def verify(self, config: dict[str, Any], payload: dict[str, Any]) -> VerificationCheckResult:
+        transaction = payload.get("onchain_transaction")
+        if not isinstance(transaction, dict) or transaction.get("exists") is not True:
+            return VerificationCheckResult(self.name, False, "Transaction was not found on devnet")
+        if config.get("require_success", True) and transaction.get("succeeded") is not True:
+            return VerificationCheckResult(self.name, False, "Transaction failed on devnet")
+
+        wallet_address = payload.get("wallet_address")
+        signers = transaction.get("signers") or []
+        if config.get("require_wallet_signer", True) and wallet_address not in signers:
+            return VerificationCheckResult(
+                self.name,
+                False,
+                "Connected wallet did not sign the transaction",
+                {"wallet_address": wallet_address, "signers": signers},
+            )
+
+        challenge_context = payload.get("challenge_context") or {}
+        required_accounts = []
+        if config.get("require_challenge_accounts", True):
+            required_accounts = list(challenge_context.get("required_accounts") or [])
+        required_accounts.extend(config.get("required_accounts", []))
+        account_keys = set(transaction.get("account_keys") or [])
+        missing_accounts = [account for account in required_accounts if account not in account_keys]
+        if missing_accounts:
+            return VerificationCheckResult(
+                self.name,
+                False,
+                "Transaction did not include required challenge accounts",
+                {"missing_accounts": missing_accounts},
+            )
+
+        modified_account_labels = config.get("required_modified_account_labels", [])
+        deltas = transaction.get("token_balance_deltas") or {}
+        missing_modifications = [
+            label
+            for label in modified_account_labels
+            if challenge_context.get(label) not in deltas
+        ]
+        if missing_modifications:
+            return VerificationCheckResult(
+                self.name,
+                False,
+                "Transaction did not modify expected token accounts",
+                {"missing_modified_account_labels": missing_modifications},
+            )
+        return VerificationCheckResult(self.name, True, "Solana transaction proof accepted")
 
 
 class PDAStateStrategy:
@@ -97,6 +191,129 @@ class TokenBalanceStrategy:
         return VerificationCheckResult(self.name, True, "Token balance proof accepted")
 
 
+class PDACommanderHijackStrategy:
+    name = "pda_commander_hijack"
+
+    def verify(self, config: dict[str, Any], payload: dict[str, Any]) -> VerificationCheckResult:
+        transaction = payload.get("onchain_transaction")
+        if not isinstance(transaction, dict) or transaction.get("exists") is not True:
+            return VerificationCheckResult(self.name, False, "Transaction was not found on devnet")
+
+        challenge_context = payload.get("challenge_context") or {}
+        exploit_parameters = challenge_context.get("exploit_parameters") or {}
+        if exploit_parameters.get("vulnerability") != "static_pda_commander_hijack":
+            return VerificationCheckResult(
+                self.name,
+                False,
+                "Challenge context is not a static PDA commander hijack",
+                {"vulnerability": exploit_parameters.get("vulnerability")},
+            )
+
+        account_keys = set(transaction.get("account_keys") or [])
+        required_labels = config.get(
+            "required_account_labels",
+            [
+                "commander_registry_pda",
+                "trusted_commander_pda",
+                "hijacked_commander_pda",
+                "authority_record_pda",
+                "wallet_address",
+            ],
+        )
+        missing_labels = [
+            label
+            for label in required_labels
+            if not challenge_context.get(label) or challenge_context.get(label) not in account_keys
+        ]
+        if missing_labels:
+            return VerificationCheckResult(
+                self.name,
+                False,
+                "Transaction did not include the static PDA commander hijack accounts",
+                {"missing_account_labels": missing_labels},
+            )
+
+        expected_commander = challenge_context.get("expected_commander_after_hijack")
+        wallet_address = payload.get("wallet_address")
+        if expected_commander and expected_commander != wallet_address:
+            return VerificationCheckResult(
+                self.name,
+                False,
+                "Expected hijacked commander does not match submitting wallet",
+                {"expected_commander": expected_commander, "wallet_address": wallet_address},
+            )
+
+        return VerificationCheckResult(
+            self.name,
+            True,
+            "Static PDA commander hijack proof accepted",
+            {"checked_account_labels": required_labels},
+        )
+
+
+class DelegatedCPIExploitStrategy:
+    name = "delegated_cpi_exploit"
+
+    def verify(self, config: dict[str, Any], payload: dict[str, Any]) -> VerificationCheckResult:
+        transaction = payload.get("onchain_transaction")
+        if not isinstance(transaction, dict) or transaction.get("exists") is not True:
+            return VerificationCheckResult(self.name, False, "Transaction was not found on devnet")
+
+        challenge_context = payload.get("challenge_context") or {}
+        exploit_parameters = challenge_context.get("exploit_parameters") or {}
+        if exploit_parameters.get("vulnerability") != "arbitrary_cpi_delegated_signer_abuse":
+            return VerificationCheckResult(
+                self.name,
+                False,
+                "Challenge context is not an arbitrary CPI delegated signer exploit",
+                {"vulnerability": exploit_parameters.get("vulnerability")},
+            )
+
+        account_keys = set(transaction.get("account_keys") or [])
+        required_labels = config.get(
+            "required_account_labels",
+            [
+                "wallet_address",
+                "guild_authority_pda",
+                "level3_state_pda",
+                "bounty_vault_pda",
+                "trusted_cpi_program",
+                "attacker_cpi_program",
+                "player_reward_account",
+                "authority_record_pda",
+            ],
+        )
+        missing_labels = [
+            label
+            for label in required_labels
+            if not challenge_context.get(label) or challenge_context.get(label) not in account_keys
+        ]
+        if missing_labels:
+            return VerificationCheckResult(
+                self.name,
+                False,
+                "Transaction did not include the delegated-CPI exploit account set",
+                {"missing_account_labels": missing_labels},
+            )
+
+        expected_sequence = exploit_parameters.get("expected_sequence")
+        required_sequence = config.get("expected_sequence", ["target", "signer", "vault", "reward"])
+        if expected_sequence != required_sequence:
+            return VerificationCheckResult(
+                self.name,
+                False,
+                "Delegated-CPI exploit sequence does not match the expected path",
+                {"expected_sequence": required_sequence, "actual_sequence": expected_sequence},
+            )
+
+        return VerificationCheckResult(
+            self.name,
+            True,
+            "Arbitrary CPI delegated signer proof accepted",
+            {"checked_account_labels": required_labels, "expected_sequence": required_sequence},
+        )
+
+
 class AuthorityStrategy:
     name = "authority"
 
@@ -119,9 +336,14 @@ class AuthorityStrategy:
 class VerificationEngine:
     def __init__(self, strategies: list[VerificationStrategy] | None = None) -> None:
         default_strategies = [
+            SessionBindingStrategy(),
+            ReplayProtectionStrategy(),
             TransactionSignatureStrategy(),
+            SolanaTransactionStrategy(),
             PDAStateStrategy(),
             TokenBalanceStrategy(),
+            PDACommanderHijackStrategy(),
+            DelegatedCPIExploitStrategy(),
             AuthorityStrategy(),
         ]
         self._strategies = {

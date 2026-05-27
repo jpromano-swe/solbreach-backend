@@ -40,3 +40,11 @@ class LevelSessionModel(UUIDTimestampMixin, Base):
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    setup_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    exploit_status: Mapped[str] = mapped_column(
+        String(30), default="not_started", index=True, nullable=False
+    )
+    wallet_address: Mapped[str | None] = mapped_column(String(64), index=True)
+    challenge_context: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    tx_signature: Mapped[str | None] = mapped_column(String(128), index=True, unique=True)
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

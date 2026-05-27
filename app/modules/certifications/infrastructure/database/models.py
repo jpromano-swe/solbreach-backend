@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import JSON, DateTime, ForeignKey, String, Text
+from sqlalchemy import JSON, DateTime, ForeignKey, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database.base import Base, UUIDTimestampMixin
@@ -8,6 +8,7 @@ from app.core.database.base import Base, UUIDTimestampMixin
 
 class CertificationModel(UUIDTimestampMixin, Base):
     __tablename__ = "certifications"
+    __table_args__ = (UniqueConstraint("user_id", "slug", name="uq_certifications_user_slug"),)
 
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True, nullable=False)
     slug: Mapped[str] = mapped_column(String(100), index=True, nullable=False)

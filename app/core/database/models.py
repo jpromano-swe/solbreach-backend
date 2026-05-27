@@ -1,5 +1,17 @@
+from app.modules.analytics.infrastructure.database.models import AnalyticsEventModel
+from app.modules.auth.infrastructure.database.models import WalletAuthNonceModel
 from app.modules.certifications.infrastructure.database.models import CertificationModel
-from app.modules.labs.infrastructure.database.models import LabModel
+from app.modules.labs.infrastructure.database.models import (
+    LabModel,
+    ResearchLabCompletionModel,
+    ResearchLabExploitVerificationModel,
+    ResearchLabFileModel,
+    ResearchLabReportModel,
+    ResearchLabSessionModel,
+    ResearchLabTerminalEventModel,
+    ResearchLabTestRunModel,
+    ResearchLabTransactionModel,
+)
 from app.modules.levels.infrastructure.database.models import LevelModel, LevelSessionModel
 from app.modules.progress.infrastructure.database.models import ProgressModel
 from app.modules.submissions.infrastructure.database.models import SubmissionModel
@@ -8,7 +20,17 @@ from app.modules.vulnerabilities.infrastructure.database.models import Vulnerabi
 
 __all__ = [
     "CertificationModel",
+    "AnalyticsEventModel",
+    "WalletAuthNonceModel",
     "LabModel",
+    "ResearchLabCompletionModel",
+    "ResearchLabExploitVerificationModel",
+    "ResearchLabFileModel",
+    "ResearchLabReportModel",
+    "ResearchLabSessionModel",
+    "ResearchLabTerminalEventModel",
+    "ResearchLabTestRunModel",
+    "ResearchLabTransactionModel",
     "LevelModel",
     "LevelSessionModel",
     "ProgressModel",

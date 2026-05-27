@@ -18,6 +18,8 @@ class Submission:
     session_id: str
     attempt_number: int
     payload: dict[str, Any] = field(default_factory=dict)
+    tx_signature: str | None = None
+    wallet_address: str | None = None
     status: SubmissionStatus = SubmissionStatus.PENDING
     verification_message: str | None = None
     verification_result: dict[str, Any] = field(default_factory=dict)

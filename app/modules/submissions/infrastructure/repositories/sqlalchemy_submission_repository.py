@@ -18,6 +18,8 @@ class SQLAlchemySubmissionRepository(SubmissionRepository):
             session_id=submission.session_id,
             attempt_number=submission.attempt_number,
             payload=submission.payload,
+            tx_signature=submission.tx_signature,
+            wallet_address=submission.wallet_address,
             status=submission.status.value,
             verification_message=submission.verification_message,
             verification_result=submission.verification_result,
@@ -32,6 +34,8 @@ class SQLAlchemySubmissionRepository(SubmissionRepository):
         if model is None:
             raise ValueError("Submission not found")
         model.status = submission.status.value
+        model.tx_signature = submission.tx_signature
+        model.wallet_address = submission.wallet_address
         model.verification_message = submission.verification_message
         model.verification_result = submission.verification_result
         await self._session.flush()
@@ -65,6 +69,13 @@ class SQLAlchemySubmissionRepository(SubmissionRepository):
         )
         return int(result.scalar_one())
 
+    async def get_by_tx_signature(self, tx_signature: str) -> Submission | None:
+        result = await self._session.execute(
+            select(SubmissionModel).where(SubmissionModel.tx_signature == tx_signature)
+        )
+        model = result.scalar_one_or_none()
+        return self._to_entity(model) if model else None
+
     @staticmethod
     def _to_entity(model: SubmissionModel) -> Submission:
         return Submission(
@@ -74,6 +85,8 @@ class SQLAlchemySubmissionRepository(SubmissionRepository):
             session_id=model.session_id,
             attempt_number=model.attempt_number,
             payload=model.payload,
+            tx_signature=model.tx_signature,
+            wallet_address=model.wallet_address,
             status=SubmissionStatus(model.status),
             verification_message=model.verification_message,
             verification_result=model.verification_result,

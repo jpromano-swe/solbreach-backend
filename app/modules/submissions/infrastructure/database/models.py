@@ -14,6 +14,8 @@ class SubmissionModel(UUIDTimestampMixin, Base):
     )
     attempt_number: Mapped[int] = mapped_column(default=1, nullable=False)
     payload: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    tx_signature: Mapped[str | None] = mapped_column(String(128), unique=True, index=True)
+    wallet_address: Mapped[str | None] = mapped_column(String(64), index=True)
     status: Mapped[str] = mapped_column(String(30), default="pending", index=True, nullable=False)
     verification_message: Mapped[str | None] = mapped_column(Text)
     verification_result: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
