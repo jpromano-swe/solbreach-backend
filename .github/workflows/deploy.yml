@@ -47,6 +47,9 @@ jobs:
           npm install -g serverless@3
           serverless --version
 
+      - name: Install Node dependencies
+        run: npm ci
+
       - name: Install Python dependencies
         run: |
           pip install poetry
