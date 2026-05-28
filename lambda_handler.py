@@ -1,5 +1,6 @@
 from mangum import Mangum
 from app.main import create_app
+import os
 
 app = create_app()
 stage = os.getenv("STAGE", "")
