@@ -38,6 +38,7 @@ custom:
     dockerizePip: non-linux
     usePoetry: true
     slim: true
+    layer: false
 
 package:
   individually: true
