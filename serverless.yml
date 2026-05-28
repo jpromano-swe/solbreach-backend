@@ -35,13 +35,13 @@ plugins:
 
 custom:
   pythonRequirements:
-    dockerizePip: non-linux
+    dockerizePip: true
     usePoetry: true
-    slim: true
+    slim: false
     strip: false
     layer: false
-    slimPatterns:
-      - "**/*.egg-info/**"
+    useDownloadCache: false
+    useStaticCache: false
 
 package:
   individually: true
