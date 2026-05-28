@@ -40,6 +40,8 @@ custom:
     slim: true
     strip: false
     layer: false
+    slimPatterns:
+      - "**/*.egg-info/**"
 
 package:
   individually: true
