@@ -6,6 +6,12 @@ provider:
   name: aws
   runtime: python3.11
   region: ${opt:region, env:AWS_REGION, 'us-east-1'}
+  vpc:
+    securityGroupIds:
+      - ${env:LAMBDA_SECURITY_GROUP_ID}
+    subnetIds:
+      - ${env:SUBNET_ID_1}
+      - ${env:SUBNET_ID_2}
   stage: ${env:STAGE, 'dev'}
   memorySize: 512
   timeout: 30
