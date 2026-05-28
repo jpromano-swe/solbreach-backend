@@ -52,7 +52,7 @@ jobs:
 
       - name: Install Python dependencies
         run: |
-          pip install poetry
+          pip install poetry poetry-plugin-export
           poetry config virtualenvs.create false
           poetry install --no-interaction --no-ansi
 
