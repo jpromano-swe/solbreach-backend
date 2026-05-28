@@ -56,6 +56,17 @@ jobs:
       - name: Verify Docker is available
         run: docker info
 
+      - name: Set environment
+        run: |
+          BRANCH=${{ steps.branch.outputs.branch }}
+          if [ "$BRANCH" = "main" ]; then
+            echo "ENVIRONMENT=production" >> $GITHUB_ENV
+          elif [ "$BRANCH" = "staging" ]; then
+            echo "ENVIRONMENT=staging" >> $GITHUB_ENV
+          else
+            echo "ENVIRONMENT=dev" >> $GITHUB_ENV
+          fi
+
       - name: Deploy to AWS Lambda
         id: deploy
         run: |
