@@ -50,11 +50,11 @@ jobs:
       - name: Install Node dependencies
         run: npm ci
 
-      - name: Install Python dependencies
-        run: |
-          pip install poetry poetry-plugin-export
-          poetry config virtualenvs.create false
-          poetry install --no-interaction --no-ansi
+      - name: Install Poetry
+        run: pip install poetry poetry-plugin-export
+
+      - name: Verify Docker is available
+        run: docker info
 
       - name: Deploy to AWS Lambda
         id: deploy
