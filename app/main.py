@@ -17,12 +17,16 @@ from app.modules.progress.presentation.api.routes import router as progress_rout
 from app.modules.submissions.presentation.api.routes import router as submissions_router
 from app.modules.users.presentation.api.routes import router as users_router
 from app.modules.vulnerabilities.presentation.api.routes import router as vulnerabilities_router
+import os
 
 
 def create_app() -> FastAPI:
     configure_logging()
     settings = get_settings()
-    app = FastAPI(title=settings.app_name, debug=settings.debug)
+
+    stage = os.getenv("STAGE","")
+    root_path = f"/{stage}" if stage else ""
+    app = FastAPI(title=settings.app_name, debug=settings.debug, root_path=root_path,)
 
     app.add_middleware(RequestIDMiddleware)
     app.add_middleware(
