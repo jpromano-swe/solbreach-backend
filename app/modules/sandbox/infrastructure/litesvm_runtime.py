@@ -189,6 +189,7 @@ class SessionMaterializer:
             tx_models = result.scalars().all()
         except Exception:
             tx_models = []
+            await self.db_session.rollback()
         for tx_model in tx_models:
             self._execute_structured(svm, tx_model.instruction_type, tx_model.parameters_json)
 

@@ -15,17 +15,23 @@ if _url:
         async def _migrate() -> None:
             engine = create_async_engine(_url)
             async with engine.begin() as conn:
-                r = await conn.execute(
-                    text("SELECT 1 FROM information_schema.columns "
-                         "WHERE table_name='research_lab_transactions' "
-                         "AND column_name='idempotency_key'")
-                )
-                if not r.scalar():
-                    await conn.execute(text(
-                        "ALTER TABLE research_lab_transactions "
-                        "ADD COLUMN idempotency_key VARCHAR(100) NOT NULL DEFAULT 'legacy'"
-                    ))
-                    _log.info("Added idempotency_key column (no constraint — handled in app layer)")
+                for col, col_type, col_default, desc in [
+                    ("idempotency_key", "VARCHAR(100)", "'legacy'", "idempotency_key"),
+                    ("sequence_number", "INTEGER", "0", "sequence_number"),
+                    ("parameters_json", "JSON", "'{}'::json", "parameters_json"),
+                ]:
+                    r = await conn.execute(
+                        text("SELECT 1 FROM information_schema.columns "
+                             "WHERE table_name='research_lab_transactions' "
+                             "AND column_name=:col"),
+                        {"col": col},
+                    )
+                    if not r.scalar():
+                        await conn.execute(text(
+                            f"ALTER TABLE research_lab_transactions "
+                            f"ADD COLUMN {col} {col_type} NOT NULL DEFAULT {col_default}"
+                        ))
+                        _log.info(f"Added {desc} column")
             await engine.dispose()
 
         loop = asyncio.new_event_loop()
