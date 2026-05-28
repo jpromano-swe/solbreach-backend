@@ -1,8 +1,11 @@
 service: solbreach-backend
 
+frameworkVersion: "^3.40.0"
+
+
 provider:
   name: aws
-  runtime: python3.12
+  runtime: python3.11
   region: ${opt:region, env:AWS_REGION, 'us-east-1'}
   stage: ${env:STAGE, 'dev'}
   memorySize: 512
@@ -55,7 +58,3 @@ functions:
       - http:
           path: /
           method: ANY
-    layers:
-      - ${env:PYTHON_LAYER_ARN, ''}
-    runtime: python3.12
-    architecture: x86_64
