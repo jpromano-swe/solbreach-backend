@@ -1,24 +1,21 @@
-import os
-import subprocess
-import sys
+import logging
 from pathlib import Path
 
+from alembic.config import Config
+from alembic import command
 from mangum import Mangum
-from app.main import create_app
 
-# Auto-run pending database migrations on cold start
-_here = Path(__file__).parent
-_alembic_cfg = str(_here / "alembic.ini")
+logging.basicConfig(level=logging.INFO)
+_log = logging.getLogger("migration")
+_alembic_cfg = Path(__file__).parent / "alembic.ini"
 try:
-    subprocess.run(
-        [sys.executable, "-m", "alembic", "--config", _alembic_cfg, "upgrade", "head"],
-        cwd=str(_here),
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
+    cfg = Config(str(_alembic_cfg))
+    command.upgrade(cfg, "head")
+    _log.info("Database migration: upgrade head completed")
 except Exception:
-    pass  # Non-fatal — app continues even if migration fails
+    _log.warning("Database migration: upgrade head failed (non-fatal)", exc_info=True)
+
+from app.main import create_app
 
 app = create_app()
 stage = os.getenv("STAGE", "")
