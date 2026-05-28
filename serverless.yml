@@ -62,7 +62,7 @@ package:
     - "!.env*"
     - "!*.md"
     - "!docs/**"
-    - "!lab_templates/**"
+    # lab_templates included — LiteSVM needs treasury_mirage.so at runtime
     - "!alembic/versions/**"
     - "!scripts/**"
 
