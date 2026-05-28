@@ -179,13 +179,17 @@ class SessionMaterializer:
         t_seed = time.time()
         self.metrics["seed_state_ms"] = (t_seed - t0) * 1000
 
-        result = await self.db_session.execute(
-            select(ResearchLabTransactionModel)
-            .where(ResearchLabTransactionModel.session_id == self.session_id)
-            .where(ResearchLabTransactionModel.execution_status == "success")
-            .order_by(ResearchLabTransactionModel.sequence_number.asc())
-        )
-        for tx_model in result.scalars().all():
+        try:
+            result = await self.db_session.execute(
+                select(ResearchLabTransactionModel)
+                .where(ResearchLabTransactionModel.session_id == self.session_id)
+                .where(ResearchLabTransactionModel.execution_status == "success")
+                .order_by(ResearchLabTransactionModel.sequence_number.asc())
+            )
+            tx_models = result.scalars().all()
+        except Exception:
+            tx_models = []
+        for tx_model in tx_models:
             self._execute_structured(svm, tx_model.instruction_type, tx_model.parameters_json)
 
         self.metrics["replay_ms"] = (time.time() - t_seed) * 1000

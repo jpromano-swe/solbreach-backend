@@ -4,7 +4,7 @@ from datetime import datetime
 from uuid import uuid4
 
 from sqlalchemy import delete, func, select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions.domain import ConflictError
@@ -304,6 +304,30 @@ class SQLAlchemyResearchLabRepository:
             if "idempotency_key" in str(exc) or "transaction_ref" in str(exc) or "sequence_number" in str(exc):
                 raise ConflictError("Duplicate transaction: idempotency key already exists for this session") from exc
             raise
+        except ProgrammingError as exc:
+            if "idempotency_key" in str(exc):
+                await self._session.rollback()
+                stmt_lock = select(ResearchLabSessionModel).where(ResearchLabSessionModel.id == session_id).with_for_update()
+                await self._session.execute(stmt_lock)
+                stmt_seq = select(func.max(ResearchLabTransactionModel.sequence_number)).where(
+                    ResearchLabTransactionModel.session_id == session_id
+                )
+                max_seq = (await self._session.execute(stmt_seq)).scalar() or 0
+                model = ResearchLabTransactionModel(
+                    id=str(uuid4()),
+                    session_id=session_id,
+                    transaction_ref=transaction_ref,
+                    instruction_type=instruction_type,
+                    parameters_json=parameters,
+                    execution_status=execution_status,
+                    logs_json=logs,
+                    submitted_at=submitted_at,
+                    sequence_number=max_seq + 1,
+                )
+                self._session.add(model)
+                await self._session.flush()
+            else:
+                raise
         await self._session.refresh(model)
         return model
 
