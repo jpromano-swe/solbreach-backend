@@ -2,7 +2,6 @@ service: solbreach-backend
 
 frameworkVersion: "^3.40.0"
 
-
 provider:
   name: aws
   runtime: python3.11
@@ -31,22 +30,31 @@ provider:
     apiGateway: true
     lambda: true
 
+plugins:
+  - serverless-python-requirements
+
+custom:
+  pythonRequirements:
+    dockerizePip: non-linux
+    usePoetry: true
+    slim: true
+
 package:
   individually: true
-  exclude:
-    - "**/*.pyc"
-    - "**/__pycache__/**"
-    - "**/.git/**"
-    - "**/tests/**"
-    - "**/test_*.py"
-    - "**/*_test.py"
-    - ".gitignore"
-    - ".env*"
-    - "*.md"
-    - "docs/**"
-    - "lab_templates/**"
-    - "alembic/versions/**"
-    - "scripts/**"
+  patterns:
+    - "!**/*.pyc"
+    - "!**/__pycache__/**"
+    - "!**/.git/**"
+    - "!**/tests/**"
+    - "!**/test_*.py"
+    - "!**/*_test.py"
+    - "!.gitignore"
+    - "!.env*"
+    - "!*.md"
+    - "!docs/**"
+    - "!lab_templates/**"
+    - "!alembic/versions/**"
+    - "!scripts/**"
 
 functions:
   api:
@@ -58,3 +66,4 @@ functions:
       - http:
           path: /
           method: ANY
+    architecture: x86_64
