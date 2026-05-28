@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 
@@ -24,15 +25,13 @@ if _url:
                         "ALTER TABLE research_lab_transactions "
                         "ADD COLUMN idempotency_key VARCHAR(100) NOT NULL DEFAULT 'legacy'"
                     ))
-                    await conn.execute(text(
-                        "ALTER TABLE research_lab_transactions "
-                        "ADD CONSTRAINT uq_research_lab_tx_idem UNIQUE (session_id, idempotency_key)"
-                    ))
-                    _log.info("Added idempotency_key column + constraint")
+                    _log.info("Added idempotency_key column (no constraint — handled in app layer)")
             await engine.dispose()
 
-        import asyncio
-        asyncio.run(_migrate())
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(_migrate())
+        _log.info("Startup migration complete")
     except Exception:
         _log.warning("Migration skipped (non-fatal)", exc_info=True)
 
