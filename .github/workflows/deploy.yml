@@ -69,6 +69,10 @@ jobs:
 
       - name: Deploy to AWS Lambda
         id: deploy
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          JWT_SECRET_KEY: ${{ secrets.JWT_SECRET_KEY }}
+          CORS_ALLOWED_ORIGINS: ${{ secrets.CORS_ALLOWED_ORIGINS }}
         run: |
           STAGE=${{ steps.branch.outputs.sanitized }}
           echo "Deploying stage: $STAGE"
