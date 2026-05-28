@@ -53,6 +53,7 @@ custom:
 package:
   individually: true
   patterns:
+    - "lab_templates/**"
     - "!**/*.pyc"
     - "!**/__pycache__/**"
     - "!**/.git/**"

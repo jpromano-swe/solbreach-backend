@@ -102,9 +102,14 @@ class SessionMaterializer:
                 / "treasury-mirage@v1"
                 / "treasury_mirage.so"
             )
+            resolved = str(so_path.resolve())
+            print(f"[solbreach] program .so path: {resolved}, exists: {so_path.exists()}")
             if so_path.exists():
                 with open(so_path, "rb") as f:
                     svm.add_program(PROGRAM_ID, f.read())
+                    print(f"[solbreach] program loaded: {PROGRAM_ID}")
+            else:
+                print(f"[solbreach] program NOT FOUND at {resolved}")
 
         self.metrics["boot_and_load_ms"] = (time.time() - t0) * 1000
 
