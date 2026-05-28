@@ -7,7 +7,7 @@ from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 class Settings(BaseSettings):
     app_name: str = "SolBreach API"
-    environment: Literal["local", "test", "staging", "production"] = "local"
+    environment: Literal["local", "dev","test", "staging", "production"] = "local"
     api_v1_prefix: str = "/api/v1"
     debug: bool = False
 

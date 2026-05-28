@@ -11,7 +11,7 @@ provider:
   timeout: 30
   environment:
     STAGE: ${self:provider.stage}
-    ENVIRONMENT: ${self:provider.stage}
+    ENVIRONMENT: ${env:ENVIRONMENT, 'dev'}
     DATABASE_URL: ${env:DATABASE_URL, ''}
     JWT_SECRET_KEY: ${env:JWT_SECRET_KEY, ''}
     CORS_ALLOWED_ORIGINS: ${env:CORS_ALLOWED_ORIGINS, ''}
