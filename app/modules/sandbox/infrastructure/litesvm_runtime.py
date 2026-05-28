@@ -12,8 +12,9 @@ from solders.pubkey import Pubkey
 from solders.keypair import Keypair
 from solders.instruction import Instruction, AccountMeta
 from solders.message import Message
-from solders.transaction import Transaction
+from solders.transaction import VersionedTransaction
 from solders.account import Account
+from solders.transaction_metadata import FailedTransactionMetadata
 
 from app.core.config.settings import get_settings
 from app.core.exceptions.domain import NotFoundError
@@ -169,11 +170,8 @@ class SessionMaterializer:
                 AccountMeta(SYS_PROGRAM_ID, False, False),
             ],
         )
-        tx = Transaction(
-            [self.payer, self.attacker],
-            Message.new_with_blockhash([init_ix], self.payer.pubkey(), svm.latest_blockhash()),
-            svm.latest_blockhash(),
-        )
+        bh = svm.latest_blockhash()
+        tx = VersionedTransaction(Message.new_with_blockhash([init_ix], self.payer.pubkey(), bh), [self.payer, self.attacker])
         svm.send_transaction(tx)
 
         t_seed = time.time()
@@ -243,11 +241,8 @@ class SessionMaterializer:
             )
 
         if ix:
-            tx = Transaction(
-                [self.payer, self.attacker],
-                Message.new_with_blockhash([ix], self.payer.pubkey(), svm.latest_blockhash()),
-                svm.latest_blockhash(),
-            )
+            bh = svm.latest_blockhash()
+            tx = VersionedTransaction(Message.new_with_blockhash([ix], self.payer.pubkey(), bh), [self.payer, self.attacker])
             return svm.send_transaction(tx)
         return None
 
@@ -352,26 +347,28 @@ class LiteSVMSandboxRuntime(SandboxRuntime):
         result = mat._execute_structured(svm, action_type, parameters)
         exec_time = time.time() - t0
 
+        success = False
+        logs = []
+        user_msg = "Transaction failed."
         if result is None:
-            success = False
-            logs = []
-        elif hasattr(result, "err"):
-            success = result.err() is None
-            meta = result.meta() if hasattr(result, "meta") else result
-            raw_logs = meta.logs() if callable(getattr(meta, "logs", None)) else getattr(meta, "logs", [])
-            logs = [str(l) for l in raw_logs]
+            user_msg = "Unknown action type."
+        elif isinstance(result, FailedTransactionMetadata):
+            err = result.err()
+            meta = result.meta()
+            logs = list(meta.logs())
+            err_str = str(err) if err else "unknown error"
+            user_msg = f"Transaction failed: {err_str}"
         else:
             success = True
-            raw_logs = result.logs() if callable(getattr(result, "logs", None)) else getattr(result, "logs", [])
-            logs = [str(l) for l in raw_logs]
-        status = "success" if success else "failure"
+            logs = list(result.logs())
+            user_msg = "Transaction submitted."
 
         return SandboxTransactionResult(
             transaction_ref=f"tx_{uuid4().hex[:16]}",
             instruction_type=action_type,
-            execution_status=status,
+            execution_status="success" if success else "failure",
             logs=logs,
-            user_facing_evidence=["Transaction submitted."] if success else ["Transaction failed."],
+            user_facing_evidence=[user_msg],
         )
 
     async def get_transaction_logs(self, session_id: str, transaction_ref: str) -> list[str]:
