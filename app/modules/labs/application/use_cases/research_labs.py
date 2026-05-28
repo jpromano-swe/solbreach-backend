@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime, timedelta
+from uuid import uuid4
 from pathlib import PurePosixPath
 
 from app.core.config.settings import Settings
@@ -249,13 +250,16 @@ class ResearchLabService:
     ) -> dict:
         session = await self._owned_active_session(user.id, session_id)
         result = await self._runtime.submit_transaction(session.id, action_type, parameters)
+        idempotency_key = parameters.get("idempotency_key", str(uuid4()))
         transaction = await self._repository.create_transaction(
             session_id=session.id,
             transaction_ref=result.transaction_ref,
             instruction_type=result.instruction_type,
+            parameters=parameters,
             execution_status=result.execution_status,
             logs=result.logs,
             submitted_at=datetime.now(UTC),
+            idempotency_key=idempotency_key,
         )
         session.objective_progress = max(session.objective_progress, 3)
         await self._repository.update_session(session)
@@ -276,8 +280,7 @@ class ResearchLabService:
         transaction = await self._repository.get_transaction(session.id, transaction_ref)
         if transaction is None:
             raise NotFoundError("Research lab transaction not found")
-        logs = await self._runtime.get_transaction_logs(session.id, transaction_ref)
-        return {"session_id": session.id, "transaction_ref": transaction_ref, "logs": logs}
+        return {"session_id": session.id, "transaction_ref": transaction_ref, "logs": transaction.logs_json}
 
     async def verify_objective(
         self, user: User, session_id: str, objective_ref: str | None

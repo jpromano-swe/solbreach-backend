@@ -4,7 +4,10 @@ from datetime import datetime
 from uuid import uuid4
 
 from sqlalchemy import delete, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.exceptions.domain import ConflictError
 
 from app.modules.labs.infrastructure.database.models import (
     ResearchLabCompletionModel,
@@ -267,21 +270,40 @@ class SQLAlchemyResearchLabRepository:
         session_id: str,
         transaction_ref: str,
         instruction_type: str,
+        parameters: dict,
         execution_status: str,
         logs: list[str],
         submitted_at: datetime,
+        idempotency_key: str,
     ) -> ResearchLabTransactionModel:
+        # Lock the session row to prevent concurrent history corruption
+        stmt_lock = select(ResearchLabSessionModel).where(ResearchLabSessionModel.id == session_id).with_for_update()
+        await self._session.execute(stmt_lock)
+
+        stmt_seq = select(func.max(ResearchLabTransactionModel.sequence_number)).where(
+            ResearchLabTransactionModel.session_id == session_id
+        )
+        max_seq = (await self._session.execute(stmt_seq)).scalar() or 0
+
         model = ResearchLabTransactionModel(
             id=str(uuid4()),
             session_id=session_id,
             transaction_ref=transaction_ref,
             instruction_type=instruction_type,
+            parameters_json=parameters,
             execution_status=execution_status,
             logs_json=logs,
             submitted_at=submitted_at,
+            idempotency_key=idempotency_key,
+            sequence_number=max_seq + 1,
         )
         self._session.add(model)
-        await self._session.flush()
+        try:
+            await self._session.flush()
+        except IntegrityError as exc:
+            if "idempotency_key" in str(exc) or "transaction_ref" in str(exc) or "sequence_number" in str(exc):
+                raise ConflictError("Duplicate transaction: idempotency key already exists for this session") from exc
+            raise
         await self._session.refresh(model)
         return model
 

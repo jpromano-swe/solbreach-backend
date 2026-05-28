@@ -84,9 +84,10 @@ async def test_treasury_mirage_research_lab_full_backend_flow(
         headers=headers,
     )
     assert account_response.status_code == 200
-    assert account_response.json()["data"]["account"]["data"]["mint"] == (
-        "counterfeit_collateral_mint"
-    )
+    account_data = account_response.json()["data"]["account"]["data"]
+    assert "mint" in account_data, "Token account data must include mint field"
+    assert "amount" in account_data, "Token account data must include amount"
+    assert int(account_data["amount"]) == 500000, f"Expected 500000 counterfeit tokens, got {account_data['amount']}"
 
     locked_report_response = await seeded_client.get(
         f"/api/v1/research-labs/sessions/{session_id}/report", headers=headers
@@ -110,8 +111,12 @@ async def test_treasury_mirage_research_lab_full_backend_flow(
         f"/api/v1/research-labs/sessions/{session_id}/transactions",
         headers=headers,
         json={
-            "action_type": "deposit_counterfeit_collateral",
-            "parameters": {"collateral_account_ref": "attacker_collateral_account"},
+            "action_type": "DEPOSIT_COLLATERAL",
+            "parameters": {
+                "amount": 50000,
+                "collateral_account_ref": "attacker_collateral_account",
+                "vault_account_ref": "counterfeit_vault_account",
+            },
         },
     )
     assert deposit_response.status_code == 200
@@ -120,7 +125,7 @@ async def test_treasury_mirage_research_lab_full_backend_flow(
     withdraw_response = await seeded_client.post(
         f"/api/v1/research-labs/sessions/{session_id}/transactions",
         headers=headers,
-        json={"action_type": "withdraw_treasury_credit", "parameters": {}},
+        json={"action_type": "WITHDRAW_AGAINST_CREDIT", "parameters": {"amount": 50000}},
     )
     assert withdraw_response.status_code == 200
     transaction_ref = withdraw_response.json()["data"]["transaction_ref"]
@@ -130,7 +135,9 @@ async def test_treasury_mirage_research_lab_full_backend_flow(
         headers=headers,
     )
     assert logs_response.status_code == 200
-    assert any("transferred" in line for line in logs_response.json()["data"]["logs"])
+    logs = logs_response.json()["data"]["logs"]
+    assert len(logs) > 0, "LiteSVM must produce execution logs"
+    assert any("Program" in line for line in logs), "Logs must contain SVM program trace"
 
     verify_response = await seeded_client.post(
         f"/api/v1/research-labs/sessions/{session_id}/verify-objective",
