@@ -53,9 +53,15 @@ custom:
 package:
   individually: true
   patterns:
-    - "lab_templates/**"
+    - "!lab_templates/**"
+    - "lab_templates/research-labs/treasury-mirage@v1/Cargo.toml"
+    - "lab_templates/research-labs/treasury-mirage@v1/programs/**"
+    - "lab_templates/research-labs/treasury-mirage@v1/treasury_mirage.json"
+    - "lab_templates/research-labs/treasury-mirage@v1/treasury_mirage.so"
     - "!**/*.pyc"
     - "!**/__pycache__/**"
+    - "!node_modules/**"
+    - "!.venv/**"
     - "!**/.git/**"
     - "!**/tests/**"
     - "!**/test_*.py"
@@ -64,7 +70,7 @@ package:
     - "!.env*"
     - "!*.md"
     - "!docs/**"
-    # lab_templates included — LiteSVM needs treasury_mirage.so at runtime
+    # Only runtime-safe lab artifacts are included; nested template build output is excluded.
     - "!alembic/versions/**"
     - "!scripts/**"
 
