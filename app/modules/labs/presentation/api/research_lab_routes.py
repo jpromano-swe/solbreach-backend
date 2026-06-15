@@ -14,6 +14,7 @@ from app.modules.labs.infrastructure.repositories.sqlalchemy_research_lab_reposi
 )
 from app.modules.labs.presentation.schemas.research_lab import (
     ResearchLabAPIResponse,
+    ResearchLabFindingReviewSubmitRequest,
     ResearchLabPatchFilesRequest,
     ResearchLabReportSaveRequest,
     ResearchLabTransactionRequest,
@@ -363,6 +364,61 @@ async def run_research_lab_tests(
 
 
 @router.get(
+    "/sessions/{session_id}/finding-review",
+    response_model=ResearchLabAPIResponse,
+    summary="Get Research Lab finding review",
+    description="Returns deterministic backend-owned finding review state for this RL1 session.",
+)
+async def get_research_lab_finding_review(
+    session_id: str,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+    runtime: SandboxRuntime = Depends(get_sandbox_runtime),
+    settings: Settings = Depends(get_settings),
+) -> ResearchLabAPIResponse:
+    data = await _service(session, runtime, settings).get_finding_review(current_user, session_id)
+    await session.commit()
+    return ResearchLabAPIResponse(data=data)
+
+
+@router.post(
+    "/sessions/{session_id}/finding-review/submit",
+    response_model=ResearchLabAPIResponse,
+    summary="Submit Research Lab finding review",
+    description="Grades deterministic RL1 finding-review answers and persists backend-owned state.",
+)
+async def submit_research_lab_finding_review(
+    session_id: str,
+    payload: ResearchLabFindingReviewSubmitRequest,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+    runtime: SandboxRuntime = Depends(get_sandbox_runtime),
+    settings: Settings = Depends(get_settings),
+) -> ResearchLabAPIResponse:
+    data = await _service(session, runtime, settings).submit_finding_review(
+        current_user, session_id, payload.answers
+    )
+    await SQLAlchemyAnalyticsRepository(session).record(
+        event_type=(
+            "finding_review_passed"
+            if data["findingReviewPassed"]
+            else "finding_review_retry"
+        ),
+        user_id=current_user.id,
+        wallet_address=current_user.wallet_address,
+        subject_type="research_lab_session",
+        subject_id=session_id,
+        metadata={
+            "score": data["score"],
+            "attempts": data["findingReviewAttempts"],
+            "failed_question_ids": data["failedQuestionIds"],
+        },
+    )
+    await session.commit()
+    return ResearchLabAPIResponse(data=data)
+
+
+@router.get(
     "/sessions/{session_id}/report",
     response_model=ResearchLabAPIResponse,
     summary="Get Research Lab report",
@@ -384,7 +440,7 @@ async def get_research_lab_report(
     "/sessions/{session_id}/report",
     response_model=ResearchLabAPIResponse,
     summary="Save Research Lab report draft",
-    description="Saves structured report fields after sandbox tests pass.",
+    description="Saves structured report fields after backend impact verification unlocks the report.",
 )
 async def save_research_lab_report(
     session_id: str,

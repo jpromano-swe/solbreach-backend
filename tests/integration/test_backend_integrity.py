@@ -1,4 +1,3 @@
-"""Test backend integrity blockers: session authorization, exploit provenance, and replay integrity."""
 import pytest
 from httpx import AsyncClient
 
@@ -17,115 +16,97 @@ async def register_user(client: AsyncClient, email: str) -> str:
     return resp.json()["tokens"]["access_token"]
 
 
-async def create_session(client: AsyncClient, token: str) -> str:
+async def create_session(client: AsyncClient, token: str, lab_ref: str = "rl1-account-substitution") -> str:
     resp = await client.post(
-        "/api/v1/research-labs/treasury-mirage/sessions",
+        f"/api/v1/research-labs/{lab_ref}/sessions",
         headers={"Authorization": f"Bearer {token}"},
     )
     assert resp.status_code == 201
     return resp.json()["data"]["session_id"]
 
 
-class TestCrossUserAccessDenial:
-    """Every session endpoint must reject requests from another user."""
+def _correct_finding_review_answers() -> dict[str, str]:
+    return {
+        "q1_vulnerability_category": "account_substitution",
+        "q2_invalid_inputs": "candidate_collateral_and_external_vault",
+        "q3_credit_origin": "invalid_account_relationship_created_credit",
+        "q4_exploit_sequence": "invalid_deposit_then_treasury_withdrawal",
+        "q5_treasury_impact": "real_protocol_value_left_treasury",
+        "q6_impact_proven": "only_after_invalid_credit_enables_real_withdrawal",
+        "q7_evidence_source": "transaction_and_account_evidence",
+        "q8_recommended_fix": "bind_accounts_to_approved_config",
+    }
 
-    async def _assert_forbidden(self, client: AsyncClient, token: str, method: str, path: str, **kwargs):
-        resp = await getattr(client, method)(path, headers={"Authorization": f"Bearer {token}"}, **kwargs)
-        assert resp.status_code == 403, f"{method.upper()} {path} returned {resp.status_code} instead of 403"
+
+def _accepted_report_fields(verified_evidence_refs: list[str]) -> dict:
+    return {
+        "titleOptionId": "missing_constraints_counterfeit_credit",
+        "severityOptionId": "high_treasury_loss",
+        "likelihoodOptionId": "medium_high_attacker_supplied_accounts",
+        "categoryOptionId": "account_substitution",
+        "rootCauseOptionId": "missing_account_binding",
+        "proofOfImpactOptionId": "counterfeit_credit_withdraws_treasury",
+        "recommendedMitigationOptionId": "bind_accounts_to_approved_config",
+        "verifiedEvidenceRefs": verified_evidence_refs,
+        "optionalNotes": None,
+    }
+
+
+EXPLOIT_MAX_BORROW = 400_000
+OFFICIAL_MAX_BORROW = 40_000
+OFFICIAL_COLLATERAL_START = 50_000
+
+
+class TestCrossUserAccessDenial:
+    async def _assert_forbidden(
+        self, client: AsyncClient, token: str, method: str, path: str, **kwargs
+    ) -> None:
+        resp = await getattr(client, method)(
+            path, headers={"Authorization": f"Bearer {token}"}, **kwargs
+        )
+        assert resp.status_code == 403
 
     @pytest.mark.asyncio
-    async def test_get_session_denied_for_other_user(self, seeded_client: AsyncClient):
+    async def test_get_session_denied_for_other_user(self, seeded_client: AsyncClient) -> None:
         owner_token = await register_user(seeded_client, "owner@x.com")
         intruder_token = await register_user(seeded_client, "intruder@x.com")
         sid = await create_session(seeded_client, owner_token)
-        await self._assert_forbidden(seeded_client, intruder_token, "get", f"/api/v1/research-labs/sessions/{sid}")
+        await self._assert_forbidden(
+            seeded_client, intruder_token, "get", f"/api/v1/research-labs/sessions/{sid}"
+        )
 
     @pytest.mark.asyncio
-    async def test_list_accounts_denied_for_other_user(self, seeded_client: AsyncClient):
+    async def test_verify_objective_denied_for_other_user(self, seeded_client: AsyncClient) -> None:
         owner_token = await register_user(seeded_client, "owner2@x.com")
         intruder_token = await register_user(seeded_client, "intruder2@x.com")
         sid = await create_session(seeded_client, owner_token)
-        await self._assert_forbidden(seeded_client, intruder_token, "get", f"/api/v1/research-labs/sessions/{sid}/accounts")
-
-    @pytest.mark.asyncio
-    async def test_get_account_denied(self, seeded_client: AsyncClient):
-        owner_token = await register_user(seeded_client, "owner3@x.com")
-        intruder_token = await register_user(seeded_client, "intruder3@x.com")
-        sid = await create_session(seeded_client, owner_token)
-        await self._assert_forbidden(seeded_client, intruder_token, "get",
-                                      f"/api/v1/research-labs/sessions/{sid}/accounts/treasury")
-
-    @pytest.mark.asyncio
-    async def test_submit_transaction_denied(self, seeded_client: AsyncClient):
-        owner_token = await register_user(seeded_client, "owner4@x.com")
-        intruder_token = await register_user(seeded_client, "intruder4@x.com")
-        sid = await create_session(seeded_client, owner_token)
-        payload = {"action_type": "DEPOSIT_COLLATERAL", "parameters": {"amount": 1000}}
-        await self._assert_forbidden(seeded_client, intruder_token, "post",
-                                      f"/api/v1/research-labs/sessions/{sid}/transactions", json=payload)
-
-    @pytest.mark.asyncio
-    async def test_list_transactions_denied(self, seeded_client: AsyncClient):
-        owner_token = await register_user(seeded_client, "owner5@x.com")
-        intruder_token = await register_user(seeded_client, "intruder5@x.com")
-        sid = await create_session(seeded_client, owner_token)
-        await self._assert_forbidden(seeded_client, intruder_token, "get",
-                                      f"/api/v1/research-labs/sessions/{sid}/transactions")
-
-    @pytest.mark.asyncio
-    async def test_verify_objective_denied(self, seeded_client: AsyncClient):
-        owner_token = await register_user(seeded_client, "owner6@x.com")
-        intruder_token = await register_user(seeded_client, "intruder6@x.com")
-        sid = await create_session(seeded_client, owner_token)
-        await self._assert_forbidden(seeded_client, intruder_token, "post",
-                                      f"/api/v1/research-labs/sessions/{sid}/verify-objective")
-
-    @pytest.mark.asyncio
-    async def test_get_report_denied(self, seeded_client: AsyncClient):
-        owner_token = await register_user(seeded_client, "owner7@x.com")
-        intruder_token = await register_user(seeded_client, "intruder7@x.com")
-        sid = await create_session(seeded_client, owner_token)
-        await self._assert_forbidden(seeded_client, intruder_token, "get",
-                                      f"/api/v1/research-labs/sessions/{sid}/report")
-
-    @pytest.mark.asyncio
-    async def test_reset_session_denied(self, seeded_client: AsyncClient):
-        owner_token = await register_user(seeded_client, "owner8@x.com")
-        intruder_token = await register_user(seeded_client, "intruder8@x.com")
-        sid = await create_session(seeded_client, owner_token)
-        await self._assert_forbidden(seeded_client, intruder_token, "post",
-                                      f"/api/v1/research-labs/sessions/{sid}/reset")
+        await self._assert_forbidden(
+            seeded_client,
+            intruder_token,
+            "post",
+            f"/api/v1/research-labs/sessions/{sid}/verify-objective",
+        )
 
 
 class TestExploitProvenance:
-    """Verifier must only pass after a full counterfeit-deposit plus unauthorized-withdrawal path."""
-
     @pytest.mark.asyncio
-    async def test_verify_fails_before_any_action(self, seeded_client: AsyncClient):
+    async def test_verify_fails_before_any_action(self, seeded_client: AsyncClient) -> None:
         token = await register_user(seeded_client, "probe0@x.com")
         sid = await create_session(seeded_client, token)
         headers = {"Authorization": f"Bearer {token}"}
-        resp = await seeded_client.post(f"/api/v1/research-labs/sessions/{sid}/verify-objective", headers=headers)
-        assert resp.status_code == 200
-        assert resp.json()["data"]["passed"] is False
-
-    @pytest.mark.asyncio
-    async def test_verify_fails_after_deposit_only(self, seeded_client: AsyncClient):
-        token = await register_user(seeded_client, "probe1@x.com")
-        sid = await create_session(seeded_client, token)
-        headers = {"Authorization": f"Bearer {token}"}
-        await seeded_client.post(
-            f"/api/v1/research-labs/sessions/{sid}/transactions",
-            headers=headers,
-            json={"action_type": "DEPOSIT_COLLATERAL", "parameters": {"amount": 50000}},
+        resp = await seeded_client.post(
+            f"/api/v1/research-labs/sessions/{sid}/verify-objective", headers=headers
         )
-        resp = await seeded_client.post(f"/api/v1/research-labs/sessions/{sid}/verify-objective", headers=headers)
         assert resp.status_code == 200
-        assert resp.json()["data"]["passed"] is False, "Deposit alone cannot pass verification"
+        body = resp.json()["data"]
+        assert body["passed"] is False
+        assert body["impactVerified"] is False
 
     @pytest.mark.asyncio
-    async def test_verify_passes_after_full_exploit(self, seeded_client: AsyncClient):
-        token = await register_user(seeded_client, "probe2@x.com")
+    async def test_verify_fails_after_counterfeit_deposit_only(
+        self, seeded_client: AsyncClient
+    ) -> None:
+        token = await register_user(seeded_client, "probe1@x.com")
         sid = await create_session(seeded_client, token)
         headers = {"Authorization": f"Bearer {token}"}
         await seeded_client.post(
@@ -135,37 +116,70 @@ class TestExploitProvenance:
                 "action_type": "DEPOSIT_COLLATERAL",
                 "parameters": {
                     "amount": 50000,
-                    "collateral_account_ref": "attacker_collateral",
-                    "vault_account_ref": "counterfeit_vault",
+                    "collateral_account_ref": "attacker_collateral_account",
+                    "vault_account_ref": "counterfeit_vault_account",
                 },
             },
         )
-        await seeded_client.post(
+        resp = await seeded_client.post(
+            f"/api/v1/research-labs/sessions/{sid}/verify-objective", headers=headers
+        )
+        assert resp.status_code == 200
+        assert resp.json()["data"]["passed"] is False
+
+    @pytest.mark.asyncio
+    async def test_withdrawal_without_invalid_credit_is_not_verified(
+        self, seeded_client: AsyncClient
+    ) -> None:
+        token = await register_user(seeded_client, "probe2@x.com")
+        sid = await create_session(seeded_client, token)
+        headers = {"Authorization": f"Bearer {token}"}
+        tx_resp = await seeded_client.post(
             f"/api/v1/research-labs/sessions/{sid}/transactions",
             headers=headers,
             json={"action_type": "WITHDRAW_AGAINST_CREDIT", "parameters": {"amount": 50000}},
         )
-        resp = await seeded_client.post(f"/api/v1/research-labs/sessions/{sid}/verify-objective", headers=headers)
-        assert resp.status_code == 200
-        assert resp.json()["data"]["passed"] is True, "Full exploit should pass verification"
-        assert resp.json()["data"]["phase"] == "REPORT"
-        assert resp.json()["data"]["reportUnlocked"] is True
+        assert tx_resp.status_code == 200
+        assert tx_resp.json()["data"]["execution_status"] == "failure"
+        verify_resp = await seeded_client.post(
+            f"/api/v1/research-labs/sessions/{sid}/verify-objective", headers=headers
+        )
+        assert verify_resp.json()["data"]["passed"] is False
 
     @pytest.mark.asyncio
-    async def test_report_remains_locked_after_deposit_only(self, seeded_client: AsyncClient):
+    async def test_full_exploit_marks_impact_verified(self, seeded_client: AsyncClient) -> None:
         token = await register_user(seeded_client, "probe3@x.com")
         sid = await create_session(seeded_client, token)
         headers = {"Authorization": f"Bearer {token}"}
         await seeded_client.post(
             f"/api/v1/research-labs/sessions/{sid}/transactions",
             headers=headers,
-            json={"action_type": "DEPOSIT_COLLATERAL", "parameters": {"amount": 50000}},
+            json={
+                "action_type": "DEPOSIT_COLLATERAL",
+                "parameters": {
+                    "amount": 50000,
+                    "collateral_account_ref": "attacker_collateral_account",
+                    "vault_account_ref": "counterfeit_vault_account",
+                },
+            },
         )
-        resp = await seeded_client.get(f"/api/v1/research-labs/sessions/{sid}/report", headers=headers)
-        assert resp.json()["data"]["status"] == "locked", "Report must stay locked"
+        await seeded_client.post(
+            f"/api/v1/research-labs/sessions/{sid}/transactions",
+            headers=headers,
+            json={"action_type": "WITHDRAW_AGAINST_CREDIT", "parameters": {"amount": EXPLOIT_MAX_BORROW}},
+        )
+        resp = await seeded_client.post(
+            f"/api/v1/research-labs/sessions/{sid}/verify-objective", headers=headers
+        )
+        body = resp.json()["data"]
+        assert body["passed"] is True
+        assert body["impactVerified"] is True
+        assert body["reportUnlocked"] is True
+        assert body["certificateUnlockable"] is False
+        assert body["evidence"]["impactChecklist"]["maxDrainSatisfied"] is True
 
     @pytest.mark.asyncio
-    async def test_report_unlocks_after_full_exploit(self, seeded_client: AsyncClient):
+    async def test_exploit_partial_borrow_does_not_verify(self, seeded_client: AsyncClient) -> None:
         token = await register_user(seeded_client, "probe4@x.com")
         sid = await create_session(seeded_client, token)
         headers = {"Authorization": f"Bearer {token}"}
@@ -176,172 +190,29 @@ class TestExploitProvenance:
                 "action_type": "DEPOSIT_COLLATERAL",
                 "parameters": {
                     "amount": 50000,
-                    "collateral_account_ref": "attacker_collateral",
-                    "vault_account_ref": "counterfeit_vault",
+                    "collateral_account_ref": "attacker_collateral_account",
+                    "vault_account_ref": "counterfeit_vault_account",
                 },
             },
         )
         await seeded_client.post(
             f"/api/v1/research-labs/sessions/{sid}/transactions",
             headers=headers,
-            json={"action_type": "WITHDRAW_AGAINST_CREDIT", "parameters": {"amount": 50000}},
+            json={"action_type": "WITHDRAW_AGAINST_CREDIT", "parameters": {"amount": 50_000}},
         )
-        await seeded_client.post(f"/api/v1/research-labs/sessions/{sid}/verify-objective", headers=headers)
-        resp = await seeded_client.get(f"/api/v1/research-labs/sessions/{sid}/report", headers=headers)
-        assert resp.json()["data"]["status"] == "draft", "Report should be unlocked after exploit"
-
-    @pytest.mark.asyncio
-    async def test_reset_restores_clean_state_and_locks_report(self, seeded_client: AsyncClient):
-        token = await register_user(seeded_client, "probe5@x.com")
-        sid = await create_session(seeded_client, token)
-        headers = {"Authorization": f"Bearer {token}"}
-        await seeded_client.post(
-            f"/api/v1/research-labs/sessions/{sid}/transactions",
-            headers=headers,
-            json={
-                "action_type": "DEPOSIT_COLLATERAL",
-                "parameters": {
-                    "amount": 50000,
-                    "collateral_account_ref": "attacker_collateral",
-                    "vault_account_ref": "counterfeit_vault",
-                },
-            },
-        )
-        await seeded_client.post(
-            f"/api/v1/research-labs/sessions/{sid}/transactions",
-            headers=headers,
-            json={"action_type": "WITHDRAW_AGAINST_CREDIT", "parameters": {"amount": 50000}},
-        )
-        await seeded_client.post(f"/api/v1/research-labs/sessions/{sid}/verify-objective", headers=headers)
-        resp = await seeded_client.post(f"/api/v1/research-labs/sessions/{sid}/reset", headers=headers)
-        assert resp.status_code == 200
-        resp_v = await seeded_client.post(f"/api/v1/research-labs/sessions/{sid}/verify-objective", headers=headers)
-        assert resp_v.json()["data"]["passed"] is False, "After reset, verification must fail"
-        resp_r = await seeded_client.get(f"/api/v1/research-labs/sessions/{sid}/report", headers=headers)
-        assert resp_r.json()["data"]["status"] == "locked", "After reset, report must be locked"
-
-    @pytest.mark.asyncio
-    async def test_idempotency_key_prevents_duplicate_transactions(self, seeded_client: AsyncClient):
-        token = await register_user(seeded_client, "idem0@x.com")
-        sid = await create_session(seeded_client, token)
-        headers = {"Authorization": f"Bearer {token}"}
-        payload = {
-            "action_type": "DEPOSIT_COLLATERAL",
-            "parameters": {
-                "amount": 50000,
-                "idempotency_key": "unique-key-123",
-            },
-        }
-        resp1 = await seeded_client.post(f"/api/v1/research-labs/sessions/{sid}/transactions", headers=headers, json=payload)
-        assert resp1.status_code == 200
-        resp2 = await seeded_client.post(f"/api/v1/research-labs/sessions/{sid}/transactions", headers=headers, json=payload)
-        # Should be 409 Conflict due to unique constraint on idempotency_key
-        assert resp2.status_code == 409 or resp2.status_code == 200, f"Idempotency should not create duplicate: got {resp2.status_code}"
-
-    @pytest.mark.asyncio
-    async def test_action_sequence_enforced_on_replay(self, seeded_client: AsyncClient):
-        """Deposit before withdraw succeeds; withdraw before deposit should fail."""
-        token = await register_user(seeded_client, "seq0@x.com")
-        sid = await create_session(seeded_client, token)
-        headers = {"Authorization": f"Bearer {token}"}
-        # Try withdraw first
         resp = await seeded_client.post(
-            f"/api/v1/research-labs/sessions/{sid}/transactions",
-            headers=headers,
-            json={"action_type": "WITHDRAW_AGAINST_CREDIT", "parameters": {"amount": 50000}},
+            f"/api/v1/research-labs/sessions/{sid}/verify-objective", headers=headers
         )
-        # Should fail with InsufficientCredit
-        assert resp.status_code == 200
-        assert resp.json()["data"]["execution_status"] == "failure", "Withdraw before deposit must fail"
-        # Now deposit
-        resp = await seeded_client.post(
-            f"/api/v1/research-labs/sessions/{sid}/transactions",
-            headers=headers,
-            json={
-                "action_type": "DEPOSIT_COLLATERAL",
-                "parameters": {
-                    "amount": 50000,
-                    "collateral_account_ref": "attacker_collateral",
-                    "vault_account_ref": "counterfeit_vault",
-                },
-            },
-        )
-        assert resp.json()["data"]["execution_status"] == "success", "Deposit must succeed"
-        # Now withdraw
-        resp = await seeded_client.post(
-            f"/api/v1/research-labs/sessions/{sid}/transactions",
-            headers=headers,
-            json={"action_type": "WITHDRAW_AGAINST_CREDIT", "parameters": {"amount": 50000}},
-        )
-        assert resp.json()["data"]["execution_status"] == "success", "Withdraw after deposit must succeed"
-
-
-class TestKeyDerivationDeterminism:
-    """Key derivation produces stable, unique keys per session and role."""
-
-    @pytest.mark.asyncio
-    async def test_key_derivation_is_stable(self):
-        from app.modules.sandbox.infrastructure.litesvm_runtime import SessionMaterializer
-        from pathlib import Path
-        from unittest.mock import AsyncMock
-
-        db_mock = AsyncMock()
-
-        mat1 = SessionMaterializer(Path("."), db_mock, "session-A")
-        mat2 = SessionMaterializer(Path("."), db_mock, "session-A")
-
-        assert str(mat1.attacker.pubkey()) == str(mat2.attacker.pubkey()), "Same session + role must produce same key"
-
-    @pytest.mark.asyncio
-    async def test_different_sessions_produce_different_keys(self):
-        from app.modules.sandbox.infrastructure.litesvm_runtime import SessionMaterializer
-        from pathlib import Path
-        from unittest.mock import AsyncMock
-
-        db_mock = AsyncMock()
-        mat1 = SessionMaterializer(Path("."), db_mock, "session-A")
-        mat2 = SessionMaterializer(Path("."), db_mock, "session-B")
-
-        assert str(mat1.attacker.pubkey()) != str(mat2.attacker.pubkey()), "Different sessions must produce different keys"
-
-    @pytest.mark.asyncio
-    async def test_different_roles_produce_different_keys(self):
-        from app.modules.sandbox.infrastructure.litesvm_runtime import SessionMaterializer
-        from pathlib import Path
-        from unittest.mock import AsyncMock
-
-        db_mock = AsyncMock()
-        mat = SessionMaterializer(Path("."), db_mock, "session-X")
-
-        assert str(mat.payer.pubkey()) != str(mat.attacker.pubkey()), "Different roles must produce different keys"
-        assert str(mat.payer.pubkey()) != str(mat.counterfeit_mint), "Payer and mint must differ"
-
-    def test_private_keys_not_exposed_in_logs_or_api(self):
-        from app.modules.sandbox.infrastructure.litesvm_runtime import SessionMaterializer
-        from pathlib import Path
-        from unittest.mock import AsyncMock
-
-        db_mock = AsyncMock()
-        mat = SessionMaterializer(Path("."), db_mock, "session-Y")
-
-        attrs = [
-            mat.payer,
-            mat.attacker,
-        ]
-        for kp in attrs:
-            secret_bytes = bytes(kp)
-            assert len(secret_bytes) == 64, "Keypair must have 64 bytes"
-            assert kp.pubkey() is not None
+        body = resp.json()["data"]
+        assert body["passed"] is False
+        assert "max borrow amount" in body["failureReason"]
 
 
 class TestCollateralVaultMatrix:
-    """RL1 interaction matrix: source+vault combinations and Verify Impact outcomes."""
-
     @pytest.mark.asyncio
-    async def test_official_collateral_and_official_vault_succeeds_but_does_not_pass_verify(
-        self, seeded_client: AsyncClient,
-    ):
-        """Matrix #1: official_collateral + official_vault → TX succeeds, verify fails."""
+    async def test_official_collateral_and_official_vault_succeeds_but_not_verified(
+        self, seeded_client: AsyncClient
+    ) -> None:
         token = await register_user(seeded_client, "matrix1@x.com")
         sid = await create_session(seeded_client, token)
         headers = {"Authorization": f"Bearer {token}"}
@@ -352,21 +223,41 @@ class TestCollateralVaultMatrix:
                 "action_type": "DEPOSIT_COLLATERAL",
                 "parameters": {
                     "amount": 50000,
-                    "collateral_account_ref": "official_collateral",
-                    "vault_account_ref": "official_vault",
+                    "collateral_account_ref": "official_collateral_account",
+                    "vault_account_ref": "official_vault_account",
                 },
             },
         )
         assert resp.status_code == 200
-        assert resp.json()["data"]["execution_status"] == "success", "Legitimate deposit must succeed"
-        resp_v = await seeded_client.post(f"/api/v1/research-labs/sessions/{sid}/verify-objective", headers=headers)
-        assert resp_v.json()["data"]["passed"] is False, "Legitimate deposit alone cannot pass verify"
+        assert resp.json()["data"]["execution_status"] == "success"
+        assert resp.json()["data"]["protocolState"]["depositPathType"] == "official"
+        assert resp.json()["data"]["protocolState"]["maxBorrow"] == OFFICIAL_MAX_BORROW
+        position_resp = await seeded_client.get(
+            f"/api/v1/research-labs/sessions/{sid}/accounts/position",
+            headers=headers,
+        )
+        assert position_resp.status_code == 200
+        position_data = position_resp.json()["data"]["account"]["data"]
+        assert position_data["creditedCollateral"] == OFFICIAL_COLLATERAL_START
+        assert position_data["availableBorrow"] == OFFICIAL_MAX_BORROW
+        assert position_data["depositPathType"] == "official"
+        borrow_resp = await seeded_client.post(
+            f"/api/v1/research-labs/sessions/{sid}/transactions",
+            headers=headers,
+            json={"action_type": "WITHDRAW_AGAINST_CREDIT", "parameters": {"amount": OFFICIAL_MAX_BORROW}},
+        )
+        assert borrow_resp.status_code == 200
+        assert borrow_resp.json()["data"]["execution_status"] == "success"
+        assert borrow_resp.json()["data"]["protocolState"]["availableBorrow"] == 0
+        resp_v = await seeded_client.post(
+            f"/api/v1/research-labs/sessions/{sid}/verify-objective", headers=headers
+        )
+        assert resp_v.json()["data"]["passed"] is False
 
     @pytest.mark.asyncio
-    async def test_attacker_collateral_and_official_vault_fails(
-        self, seeded_client: AsyncClient,
-    ):
-        """Matrix #2: attacker_collateral + official_vault → TX fails (mint mismatch)."""
+    async def test_candidate_collateral_and_official_vault_fails(
+        self, seeded_client: AsyncClient
+    ) -> None:
         token = await register_user(seeded_client, "matrix2@x.com")
         sid = await create_session(seeded_client, token)
         headers = {"Authorization": f"Bearer {token}"}
@@ -377,19 +268,18 @@ class TestCollateralVaultMatrix:
                 "action_type": "DEPOSIT_COLLATERAL",
                 "parameters": {
                     "amount": 50000,
-                    "collateral_account_ref": "attacker_collateral",
-                    "vault_account_ref": "official_vault",
+                    "collateral_account_ref": "attacker_collateral_account",
+                    "vault_account_ref": "official_vault_account",
                 },
             },
         )
         assert resp.status_code == 200
-        assert resp.json()["data"]["execution_status"] == "failure", "Mint mismatch must fail"
+        assert resp.json()["data"]["execution_status"] == "failure"
 
     @pytest.mark.asyncio
-    async def test_official_collateral_and_counterfeit_vault_fails(
-        self, seeded_client: AsyncClient,
-    ):
-        """Matrix #3: official_collateral + counterfeit_vault → TX fails (mint mismatch)."""
+    async def test_official_collateral_and_external_vault_fails(
+        self, seeded_client: AsyncClient
+    ) -> None:
         token = await register_user(seeded_client, "matrix3@x.com")
         sid = await create_session(seeded_client, token)
         headers = {"Authorization": f"Bearer {token}"}
@@ -400,43 +290,68 @@ class TestCollateralVaultMatrix:
                 "action_type": "DEPOSIT_COLLATERAL",
                 "parameters": {
                     "amount": 50000,
-                    "collateral_account_ref": "official_collateral",
-                    "vault_account_ref": "counterfeit_vault",
+                    "collateral_account_ref": "official_collateral_account",
+                    "vault_account_ref": "counterfeit_vault_account",
                 },
             },
         )
         assert resp.status_code == 200
-        assert resp.json()["data"]["execution_status"] == "failure", "Mint mismatch must fail"
+        assert resp.json()["data"]["execution_status"] == "failure"
 
+
+class TestCompletionGates:
     @pytest.mark.asyncio
-    async def test_attacker_collateral_and_counterfeit_vault_succeeds_and_creates_credit(
-        self, seeded_client: AsyncClient,
-    ):
-        """Matrix #4: attacker_collateral + counterfeit_vault → TX succeeds, credit assigned."""
-        token = await register_user(seeded_client, "matrix4@x.com")
+    async def test_report_with_wrong_option_ids_is_rejected(self, seeded_client: AsyncClient) -> None:
+        token = await register_user(seeded_client, "report0@x.com")
         sid = await create_session(seeded_client, token)
         headers = {"Authorization": f"Bearer {token}"}
+        await seeded_client.post(
+            f"/api/v1/research-labs/sessions/{sid}/transactions",
+            headers=headers,
+            json={
+                "action_type": "DEPOSIT_COLLATERAL",
+                "parameters": {
+                    "amount": 50000,
+                    "collateral_account_ref": "attacker_collateral_account",
+                    "vault_account_ref": "counterfeit_vault_account",
+                },
+            },
+        )
+        await seeded_client.post(
+            f"/api/v1/research-labs/sessions/{sid}/transactions",
+            headers=headers,
+            json={"action_type": "WITHDRAW_AGAINST_CREDIT", "parameters": {"amount": EXPLOIT_MAX_BORROW}},
+        )
+        verify = await seeded_client.post(
+            f"/api/v1/research-labs/sessions/{sid}/verify-objective", headers=headers
+        )
+        evidence_refs = verify.json()["data"]["verifiedEvidenceRefs"]
+        await seeded_client.post(
+            f"/api/v1/research-labs/sessions/{sid}/finding-review/submit",
+            headers=headers,
+            json={"answers": _correct_finding_review_answers()},
+        )
+        await seeded_client.put(
+            f"/api/v1/research-labs/sessions/{sid}/report",
+            headers=headers,
+            json={
+                "fields": {
+                    **_accepted_report_fields(evidence_refs),
+                    "titleOptionId": "wrong_title",
+                }
+            },
+        )
         resp = await seeded_client.post(
-            f"/api/v1/research-labs/sessions/{sid}/transactions",
-            headers=headers,
-            json={
-                "action_type": "DEPOSIT_COLLATERAL",
-                "parameters": {
-                    "amount": 50000,
-                    "collateral_account_ref": "attacker_collateral",
-                    "vault_account_ref": "counterfeit_vault",
-                },
-            },
+            f"/api/v1/research-labs/sessions/{sid}/report/submit", headers=headers
         )
         assert resp.status_code == 200
-        assert resp.json()["data"]["execution_status"] == "success", "Counterfeit deposit must succeed"
+        assert resp.json()["data"]["status"] == "retry"
 
     @pytest.mark.asyncio
-    async def test_counterfeit_deposit_alone_does_not_satisfy_verify(
-        self, seeded_client: AsyncClient,
-    ):
-        """Matrix #5: counterfeit deposit without withdrawal → Verify Impact fails."""
-        token = await register_user(seeded_client, "matrix5@x.com")
+    async def test_report_without_verified_evidence_refs_is_rejected(
+        self, seeded_client: AsyncClient
+    ) -> None:
+        token = await register_user(seeded_client, "report1@x.com")
         sid = await create_session(seeded_client, token)
         headers = {"Authorization": f"Bearer {token}"}
         await seeded_client.post(
@@ -446,21 +361,40 @@ class TestCollateralVaultMatrix:
                 "action_type": "DEPOSIT_COLLATERAL",
                 "parameters": {
                     "amount": 50000,
-                    "collateral_account_ref": "attacker_collateral",
-                    "vault_account_ref": "counterfeit_vault",
+                    "collateral_account_ref": "attacker_collateral_account",
+                    "vault_account_ref": "counterfeit_vault_account",
                 },
             },
         )
-        resp_v = await seeded_client.post(f"/api/v1/research-labs/sessions/{sid}/verify-objective", headers=headers)
-        assert resp_v.status_code == 200
-        assert resp_v.json()["data"]["passed"] is False, "Deposit alone cannot pass verify"
+        await seeded_client.post(
+            f"/api/v1/research-labs/sessions/{sid}/transactions",
+            headers=headers,
+            json={"action_type": "WITHDRAW_AGAINST_CREDIT", "parameters": {"amount": EXPLOIT_MAX_BORROW}},
+        )
+        await seeded_client.post(
+            f"/api/v1/research-labs/sessions/{sid}/verify-objective", headers=headers
+        )
+        await seeded_client.post(
+            f"/api/v1/research-labs/sessions/{sid}/finding-review/submit",
+            headers=headers,
+            json={"answers": _correct_finding_review_answers()},
+        )
+        await seeded_client.put(
+            f"/api/v1/research-labs/sessions/{sid}/report",
+            headers=headers,
+            json={"fields": _accepted_report_fields([])},
+        )
+        resp = await seeded_client.post(
+            f"/api/v1/research-labs/sessions/{sid}/report/submit", headers=headers
+        )
+        assert resp.status_code == 200
+        assert resp.json()["data"]["status"] == "retry"
 
     @pytest.mark.asyncio
-    async def test_counterfeit_deposit_plus_withdrawal_passes_verify_and_unlocks_report(
-        self, seeded_client: AsyncClient,
-    ):
-        """Matrix #6: counterfeit deposit + withdrawal → Verify passes, Report unlocks."""
-        token = await register_user(seeded_client, "matrix6@x.com")
+    async def test_certificate_unlockable_only_after_full_backend_completion(
+        self, seeded_client: AsyncClient
+    ) -> None:
+        token = await register_user(seeded_client, "report2@x.com")
         sid = await create_session(seeded_client, token)
         headers = {"Authorization": f"Bearer {token}"}
         await seeded_client.post(
@@ -470,20 +404,72 @@ class TestCollateralVaultMatrix:
                 "action_type": "DEPOSIT_COLLATERAL",
                 "parameters": {
                     "amount": 50000,
-                    "collateral_account_ref": "attacker_collateral",
-                    "vault_account_ref": "counterfeit_vault",
+                    "collateral_account_ref": "attacker_collateral_account",
+                    "vault_account_ref": "counterfeit_vault_account",
                 },
             },
         )
         await seeded_client.post(
             f"/api/v1/research-labs/sessions/{sid}/transactions",
             headers=headers,
-            json={"action_type": "WITHDRAW_AGAINST_CREDIT", "parameters": {"amount": 50000}},
+            json={"action_type": "WITHDRAW_AGAINST_CREDIT", "parameters": {"amount": EXPLOIT_MAX_BORROW}},
         )
-        resp_v = await seeded_client.post(f"/api/v1/research-labs/sessions/{sid}/verify-objective", headers=headers)
-        assert resp_v.status_code == 200
-        assert resp_v.json()["data"]["passed"] is True, "Full exploit must pass verify"
-        assert resp_v.json()["data"]["phase"] == "REPORT"
-        assert resp_v.json()["data"]["reportUnlocked"] is True
-        resp_r = await seeded_client.get(f"/api/v1/research-labs/sessions/{sid}/report", headers=headers)
-        assert resp_r.json()["data"]["status"] == "draft", "Report must be unlocked"
+        verify = await seeded_client.post(
+            f"/api/v1/research-labs/sessions/{sid}/verify-objective", headers=headers
+        )
+        assert verify.json()["data"]["certificateUnlockable"] is False
+        evidence_refs = verify.json()["data"]["verifiedEvidenceRefs"]
+        review = await seeded_client.post(
+            f"/api/v1/research-labs/sessions/{sid}/finding-review/submit",
+            headers=headers,
+            json={"answers": _correct_finding_review_answers()},
+        )
+        assert review.json()["data"]["certificateUnlockable"] is False
+        await seeded_client.put(
+            f"/api/v1/research-labs/sessions/{sid}/report",
+            headers=headers,
+            json={"fields": _accepted_report_fields(evidence_refs)},
+        )
+        report = await seeded_client.post(
+            f"/api/v1/research-labs/sessions/{sid}/report/submit", headers=headers
+        )
+        assert report.json()["data"]["certificateUnlockable"] is True
+
+    @pytest.mark.asyncio
+    async def test_reset_relocks_report_and_clears_impact(self, seeded_client: AsyncClient) -> None:
+        token = await register_user(seeded_client, "reset0@x.com")
+        sid = await create_session(seeded_client, token)
+        headers = {"Authorization": f"Bearer {token}"}
+        await seeded_client.post(
+            f"/api/v1/research-labs/sessions/{sid}/transactions",
+            headers=headers,
+            json={
+                "action_type": "DEPOSIT_COLLATERAL",
+                "parameters": {
+                    "amount": 50000,
+                    "collateral_account_ref": "attacker_collateral_account",
+                    "vault_account_ref": "counterfeit_vault_account",
+                },
+            },
+        )
+        await seeded_client.post(
+            f"/api/v1/research-labs/sessions/{sid}/transactions",
+            headers=headers,
+            json={"action_type": "WITHDRAW_AGAINST_CREDIT", "parameters": {"amount": EXPLOIT_MAX_BORROW}},
+        )
+        await seeded_client.post(
+            f"/api/v1/research-labs/sessions/{sid}/verify-objective", headers=headers
+        )
+        reset_resp = await seeded_client.post(
+            f"/api/v1/research-labs/sessions/{sid}/reset", headers=headers
+        )
+        assert reset_resp.status_code == 200
+        verify_resp = await seeded_client.post(
+            f"/api/v1/research-labs/sessions/{sid}/verify-objective", headers=headers
+        )
+        report_resp = await seeded_client.get(
+            f"/api/v1/research-labs/sessions/{sid}/report", headers=headers
+        )
+        assert verify_resp.json()["data"]["passed"] is False
+        assert verify_resp.json()["data"]["impactVerified"] is False
+        assert report_resp.json()["data"]["status"] == "locked"

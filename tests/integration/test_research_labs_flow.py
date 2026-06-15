@@ -18,7 +18,38 @@ async def login_token(client: AsyncClient, email: str) -> str:
     return response.json()["tokens"]["access_token"]
 
 
-async def test_treasury_mirage_research_lab_full_backend_flow(
+def _correct_finding_review_answers() -> dict[str, str]:
+    return {
+        "q1_vulnerability_category": "account_substitution",
+        "q2_invalid_inputs": "candidate_collateral_and_external_vault",
+        "q3_credit_origin": "invalid_account_relationship_created_credit",
+        "q4_exploit_sequence": "invalid_deposit_then_treasury_withdrawal",
+        "q5_treasury_impact": "real_protocol_value_left_treasury",
+        "q6_impact_proven": "only_after_invalid_credit_enables_real_withdrawal",
+        "q7_evidence_source": "transaction_and_account_evidence",
+        "q8_recommended_fix": "bind_accounts_to_approved_config",
+    }
+
+
+def _accepted_report_fields(verified_evidence_refs: list[str]) -> dict:
+    return {
+        "titleOptionId": "missing_constraints_counterfeit_credit",
+        "severityOptionId": "high_treasury_loss",
+        "likelihoodOptionId": "medium_high_attacker_supplied_accounts",
+        "categoryOptionId": "account_substitution",
+        "rootCauseOptionId": "missing_account_binding",
+        "proofOfImpactOptionId": "counterfeit_credit_withdraws_treasury",
+        "recommendedMitigationOptionId": "bind_accounts_to_approved_config",
+        "verifiedEvidenceRefs": verified_evidence_refs,
+        "optionalNotes": "Backend-verified impact confirms invalid account binding.",
+    }
+
+
+EXPLOIT_MAX_BORROW = 400_000
+OFFICIAL_MAX_BORROW = 40_000
+
+
+async def test_rl1_account_substitution_full_backend_flow(
     seeded_client: AsyncClient,
 ) -> None:
     await register_user(seeded_client, email="researcher@example.com")
@@ -29,65 +60,37 @@ async def test_treasury_mirage_research_lab_full_backend_flow(
     assert catalog_response.status_code == 200
     catalog = catalog_response.json()
     assert catalog["success"] is True
-    assert catalog["data"][0]["id"] == "rl-001"
-    assert catalog["data"][0]["slug"] == "treasury-mirage"
-    assert "test_command" not in catalog["data"][0]
+    assert catalog["data"][0]["id"] == "rl1-account-substitution"
+    assert catalog["data"][0]["slug"] == "account-substitution"
+    assert catalog["data"][0]["title"] == "Account Substitution"
+    assert "Treasury Mirage" not in catalog["data"][0]["title"]
 
-    detail_response = await seeded_client.get("/api/v1/research-labs/rl-001", headers=headers)
+    detail_response = await seeded_client.get(
+        "/api/v1/research-labs/rl1-account-substitution", headers=headers
+    )
     assert detail_response.status_code == 200
     detail = detail_response.json()["data"]
     assert detail["entry_file"] == "programs/treasury_mirage/src/lib.rs"
-    assert detail["scenario_briefing"]
+    assert "account binding" in detail["objective"].lower()
 
     create_response = await seeded_client.post(
-        "/api/v1/research-labs/rl-001/sessions", headers=headers
+        "/api/v1/research-labs/rl1-account-substitution/sessions", headers=headers
     )
     assert create_response.status_code == 201
     session_data = create_response.json()["data"]
     session_id = session_data["session_id"]
     assert session_data["status"] == "active"
     assert session_data["phase"] == "INSPECT"
-    assert session_data["sandboxStatus"] == "READY"
+    assert session_data["impactVerified"] is False
     assert session_data["reportUnlocked"] is False
-    assert session_data["allowed_files"] == ["programs/treasury_mirage/src/lib.rs"]
-    assert session_data["files"][0]["writable"] is False
-    assert "deposit_collateral" in session_data["files"][0]["content"]
-    assert session_data["terminal"][0]["sequence"] == 1
+    assert session_data["reportStatus"] == "locked"
+    assert session_data["certificateUnlockable"] is False
 
-    patch_attempt = await seeded_client.patch(
-        f"/api/v1/research-labs/sessions/{session_id}/files",
-        headers=headers,
-        json={
-            "files": [
-                {
-                    "path": "programs/treasury_mirage/src/lib.rs",
-                    "content": "bad",
-                }
-            ]
-        },
+    locked_finding_response = await seeded_client.get(
+        f"/api/v1/research-labs/sessions/{session_id}/finding-review", headers=headers
     )
-    assert patch_attempt.status_code == 403
-
-    accounts_response = await seeded_client.get(
-        f"/api/v1/research-labs/sessions/{session_id}/accounts", headers=headers
-    )
-    assert accounts_response.status_code == 200
-    accounts = accounts_response.json()["data"]["accounts"]
-    assert {account["ref"] for account in accounts} >= {
-        "treasury_vault",
-        "attacker_collateral_account",
-        "attacker_reward_account",
-    }
-
-    account_response = await seeded_client.get(
-        f"/api/v1/research-labs/sessions/{session_id}/accounts/attacker_collateral_account",
-        headers=headers,
-    )
-    assert account_response.status_code == 200
-    account_data = account_response.json()["data"]["account"]["data"]
-    assert "mint" in account_data, "Token account data must include mint field"
-    assert "amount" in account_data, "Token account data must include amount"
-    assert int(account_data["amount"]) == 500000, f"Expected 500000 counterfeit tokens, got {account_data['amount']}"
+    assert locked_finding_response.status_code == 200
+    assert locked_finding_response.json()["data"]["status"] == "locked"
 
     locked_report_response = await seeded_client.get(
         f"/api/v1/research-labs/sessions/{session_id}/report", headers=headers
@@ -95,17 +98,13 @@ async def test_treasury_mirage_research_lab_full_backend_flow(
     assert locked_report_response.status_code == 200
     assert locked_report_response.json()["data"]["status"] == "locked"
 
-    premature_submit_response = await seeded_client.post(
-        f"/api/v1/research-labs/sessions/{session_id}/report/submit", headers=headers
-    )
-    assert premature_submit_response.status_code == 409
-
     premature_verify = await seeded_client.post(
         f"/api/v1/research-labs/sessions/{session_id}/verify-objective",
         headers=headers,
     )
     assert premature_verify.status_code == 200
     assert premature_verify.json()["data"]["passed"] is False
+    assert premature_verify.json()["data"]["impactVerified"] is False
 
     deposit_response = await seeded_client.post(
         f"/api/v1/research-labs/sessions/{session_id}/transactions",
@@ -120,24 +119,24 @@ async def test_treasury_mirage_research_lab_full_backend_flow(
         },
     )
     assert deposit_response.status_code == 200
-    assert deposit_response.json()["data"]["execution_status"] == "success"
+    deposit_data = deposit_response.json()["data"]
+    assert deposit_data["execution_status"] == "success"
+    assert deposit_data["accountDeltas"]
+    assert deposit_data["evidenceRefs"] == [f"transaction:{deposit_data['transaction_ref']}"]
+    assert deposit_data["protocolState"]["depositPathType"] == "exploit"
+    assert deposit_data["protocolState"]["creditedCollateral"] == 500_000
+    assert deposit_data["protocolState"]["maxBorrow"] == EXPLOIT_MAX_BORROW
 
     withdraw_response = await seeded_client.post(
         f"/api/v1/research-labs/sessions/{session_id}/transactions",
         headers=headers,
-        json={"action_type": "WITHDRAW_AGAINST_CREDIT", "parameters": {"amount": 50000}},
+        json={"action_type": "WITHDRAW_AGAINST_CREDIT", "parameters": {"amount": EXPLOIT_MAX_BORROW}},
     )
     assert withdraw_response.status_code == 200
-    transaction_ref = withdraw_response.json()["data"]["transaction_ref"]
-
-    logs_response = await seeded_client.get(
-        f"/api/v1/research-labs/sessions/{session_id}/transactions/{transaction_ref}/logs",
-        headers=headers,
-    )
-    assert logs_response.status_code == 200
-    logs = logs_response.json()["data"]["logs"]
-    assert len(logs) > 0, "LiteSVM must produce execution logs"
-    assert any("Program" in line for line in logs), "Logs must contain SVM program trace"
+    withdraw_data = withdraw_response.json()["data"]
+    assert withdraw_data["execution_status"] == "success"
+    assert withdraw_data["protocolState"]["borrowedTotal"] == EXPLOIT_MAX_BORROW
+    assert withdraw_data["protocolState"]["availableBorrow"] == 0
 
     verify_response = await seeded_client.post(
         f"/api/v1/research-labs/sessions/{session_id}/verify-objective",
@@ -146,8 +145,15 @@ async def test_treasury_mirage_research_lab_full_backend_flow(
     assert verify_response.status_code == 200
     verified = verify_response.json()["data"]
     assert verified["passed"] is True
-    assert verified["phase"] == "REPORT"
+    assert verified["impactVerified"] is True
     assert verified["reportUnlocked"] is True
+    assert verified["certificateUnlockable"] is False
+    assert verified["phase"] == "SUBMIT_FINDING"
+    assert len(verified["verifiedEvidenceRefs"]) >= 3
+    assert verified["evidence"]["impactChecklist"]["counterfeitDepositObserved"] is True
+    assert verified["evidence"]["impactChecklist"]["realProtocolTreasuryValueDecreased"] is True
+    assert verified["evidence"]["impactChecklist"]["maxDrainSatisfied"] is True
+    assert verified["evidence"]["borrowedAmount"] == EXPLOIT_MAX_BORROW
 
     draft_report_response = await seeded_client.get(
         f"/api/v1/research-labs/sessions/{session_id}/report", headers=headers
@@ -155,22 +161,35 @@ async def test_treasury_mirage_research_lab_full_backend_flow(
     assert draft_report_response.status_code == 200
     draft_report = draft_report_response.json()["data"]
     assert draft_report["status"] == "draft"
-    assert draft_report["fields"]["vulnerability_category"] is None
-    assert draft_report["allowed_values"]["severity"] == ["low", "medium", "high"]
+    assert draft_report["verifiedEvidenceRefs"] == verified["verifiedEvidenceRefs"]
+    assert draft_report["fields"]["titleOptionId"] is None
+
+    bad_finding_response = await seeded_client.post(
+        f"/api/v1/research-labs/sessions/{session_id}/finding-review/submit",
+        headers=headers,
+        json={"answers": {"q1_vulnerability_category": "oracle_manipulation"}},
+    )
+    assert bad_finding_response.status_code == 200
+    assert bad_finding_response.json()["data"]["status"] == "retry"
+    assert bad_finding_response.json()["data"]["findingReviewPassed"] is False
+
+    good_finding_response = await seeded_client.post(
+        f"/api/v1/research-labs/sessions/{session_id}/finding-review/submit",
+        headers=headers,
+        json={"answers": _correct_finding_review_answers()},
+    )
+    assert good_finding_response.status_code == 200
+    assert good_finding_response.json()["data"]["status"] == "passed"
+    assert good_finding_response.json()["data"]["findingReviewPassed"] is True
 
     bad_report_response = await seeded_client.put(
         f"/api/v1/research-labs/sessions/{session_id}/report",
         headers=headers,
         json={
             "fields": {
-                "vulnerability_category": "missing_validation",
-                "affected_area": "deposit_instruction",
-                "attacker_controlled_input": "collateral_token_account",
-                "root_cause": "The wrong thing is checked.",
-                "impact": "The issue can cause bad accounting.",
-                "proof": "The tests pass after a code patch.",
-                "recommended_fix": "Add a validation check.",
-                "severity": "low",
+                **_accepted_report_fields([]),
+                "titleOptionId": "wrong-title",
+                "verifiedEvidenceRefs": verified["verifiedEvidenceRefs"],
             }
         },
     )
@@ -181,33 +200,13 @@ async def test_treasury_mirage_research_lab_full_backend_flow(
     assert retry_response.status_code == 200
     retry = retry_response.json()["data"]
     assert retry["status"] == "retry"
-    assert retry["lab_completed"] is False
-    assert retry["xp_awarded"] == 0
+    assert retry["labCompleted"] is False
+    assert retry["certificateUnlockable"] is False
 
     accepted_report_response = await seeded_client.put(
         f"/api/v1/research-labs/sessions/{session_id}/report",
         headers=headers,
-        json={
-            "fields": {
-                "vulnerability_category": "missing_validation",
-                "affected_area": "deposit_instruction",
-                "attacker_controlled_input": "collateral_token_account",
-                "root_cause": (
-                    "The deposit instruction has missing validation for the collateral token "
-                    "account mint."
-                ),
-                "impact": (
-                    "An attacker can deposit counterfeit tokens, receive credit, and withdraw "
-                    "treasury value."
-                ),
-                "proof": "The sandbox evidence shows counterfeit collateral was credited.",
-                "recommended_fix": (
-                    "Require the token account mint to equal the accepted official mint before "
-                    "crediting deposits."
-                ),
-                "severity": "medium",
-            }
-        },
+        json={"fields": _accepted_report_fields(verified["verifiedEvidenceRefs"])},
     )
     assert accepted_report_response.status_code == 200
     accepted_response = await seeded_client.post(
@@ -216,14 +215,20 @@ async def test_treasury_mirage_research_lab_full_backend_flow(
     assert accepted_response.status_code == 200
     accepted = accepted_response.json()["data"]
     assert accepted["status"] == "accepted"
-    assert accepted["lab_completed"] is True
-    assert accepted["xp_awarded"] == 250
+    assert accepted["labCompleted"] is True
+    assert accepted["xpAwarded"] == 250
+    assert accepted["certificateUnlockable"] is True
 
     completed_session_response = await seeded_client.get(
         f"/api/v1/research-labs/sessions/{session_id}", headers=headers
     )
     assert completed_session_response.status_code == 200
-    assert completed_session_response.json()["data"]["phase"] == "COMPLETED"
+    completed = completed_session_response.json()["data"]
+    assert completed["phase"] == "COMPLETED"
+    assert completed["status"] == "completed"
+    assert completed["findingReviewPassed"] is True
+    assert completed["auditReportBuilderPassed"] is True
+    assert completed["certificateUnlockable"] is True
 
     me_response = await seeded_client.get("/api/v1/auth/me", headers=headers)
     assert me_response.json()["xp"] == 250
@@ -235,7 +240,7 @@ async def test_research_lab_session_ownership_is_enforced(seeded_client: AsyncCl
     owner_token = await login_token(seeded_client, email="owner@example.com")
     owner_headers = {"Authorization": f"Bearer {owner_token}"}
     create_response = await seeded_client.post(
-        "/api/v1/research-labs/treasury-mirage/sessions", headers=owner_headers
+        "/api/v1/research-labs/rl1-account-substitution/sessions", headers=owner_headers
     )
     session_id = create_response.json()["data"]["session_id"]
 

@@ -37,6 +37,78 @@ from app.modules.users.domain.repositories.user_repository import UserRepository
 logger = logging.getLogger(__name__)
 
 
+RL1_FINDING_REVIEW_QUESTIONS: dict[str, dict[str, object]] = {
+    "q1_vulnerability_category": {
+        "correct": "account_substitution",
+        "critical": True,
+    },
+    "q2_invalid_inputs": {
+        "correct": "candidate_collateral_and_external_vault",
+        "critical": False,
+    },
+    "q3_credit_origin": {
+        "correct": "invalid_account_relationship_created_credit",
+        "critical": False,
+    },
+    "q4_exploit_sequence": {
+        "correct": "invalid_deposit_then_treasury_withdrawal",
+        "critical": True,
+    },
+    "q5_treasury_impact": {
+        "correct": "real_protocol_value_left_treasury",
+        "critical": False,
+    },
+    "q6_impact_proven": {
+        "correct": "only_after_invalid_credit_enables_real_withdrawal",
+        "critical": True,
+    },
+    "q7_evidence_source": {
+        "correct": "transaction_and_account_evidence",
+        "critical": False,
+    },
+    "q8_recommended_fix": {
+        "correct": "bind_accounts_to_approved_config",
+        "critical": True,
+    },
+}
+
+RL1_REPORT_OPTIONS: dict[str, list[dict[str, str]]] = {
+    "titleOptionId": [
+        {
+            "id": "missing_constraints_counterfeit_credit",
+            "label": "Missing constraints allow counterfeit collateral credit",
+        }
+    ],
+    "severityOptionId": [
+        {"id": "high_treasury_loss", "label": "High — treasury value can be drained"}
+    ],
+    "likelihoodOptionId": [
+        {
+            "id": "medium_high_attacker_supplied_accounts",
+            "label": "Medium-High — attacker controls supplied account set",
+        }
+    ],
+    "categoryOptionId": [
+        {"id": "account_substitution", "label": "Account substitution"}
+    ],
+    "rootCauseOptionId": [
+        {"id": "missing_account_binding", "label": "Missing account binding"}
+    ],
+    "proofOfImpactOptionId": [
+        {
+            "id": "counterfeit_credit_withdraws_treasury",
+            "label": "Counterfeit credit enabled real treasury withdrawal",
+        }
+    ],
+    "recommendedMitigationOptionId": [
+        {
+            "id": "bind_accounts_to_approved_config",
+            "label": "Bind supplied accounts to approved protocol configuration",
+        }
+    ],
+}
+
+
 class ResearchLabService:
     def __init__(
         self,
@@ -105,7 +177,14 @@ class ResearchLabService:
             "research_lab_session_started",
             extra={"user_id": user.id, "session_id": session.id, "lab_id": manifest.id},
         )
-        return _session_payload(session, manifest, files, terminal_events=terminal)
+        return _session_payload(
+            session,
+            manifest,
+            files,
+            terminal_events=terminal,
+            transaction_count=0,
+            report_status=ResearchLabReportStatus.LOCKED.value,
+        )
 
     async def get_session(self, user: User, session_id: str) -> dict:
         session = await self._owned_session(user.id, session_id)
@@ -113,12 +192,16 @@ class ResearchLabService:
         files = await self._repository.list_files(session.id)
         terminal = await self._repository.list_terminal_events(session.id, None)
         latest_run = await self._repository.latest_test_run(session.id)
+        transactions = await self._repository.list_transactions(session.id)
+        report = await self._repository.get_report(session.id)
         return _session_payload(
             session,
             manifest,
             files,
             terminal_events=terminal,
             latest_test_run=latest_run,
+            transaction_count=len(transactions),
+            report_status=report.status if report is not None else _report_status_for(session),
         )
 
     async def patch_files(self, user: User, session_id: str, files: list[dict[str, str]]) -> dict:
@@ -251,6 +334,7 @@ class ResearchLabService:
         session = await self._owned_active_session(user.id, session_id)
         result = await self._runtime.submit_transaction(session.id, action_type, parameters)
         idempotency_key = parameters.get("idempotency_key", str(uuid4()))
+        evidence_refs = [f"transaction:{result.transaction_ref}"]
         transaction = await self._repository.create_transaction(
             session_id=session.id,
             transaction_ref=result.transaction_ref,
@@ -258,12 +342,18 @@ class ResearchLabService:
             parameters=parameters,
             execution_status=result.execution_status,
             logs=result.logs,
+            account_deltas=result.account_deltas,
+            evidence_refs=evidence_refs,
             submitted_at=datetime.now(UTC),
             idempotency_key=idempotency_key,
         )
-        session.objective_progress = max(session.objective_progress, 3)
+        session.objective_progress = max(session.objective_progress, 2)
         await self._repository.update_session(session)
-        return _transaction_payload(transaction, user_facing_evidence=result.user_facing_evidence)
+        return _transaction_payload(
+            transaction,
+            protocol_state=result.protocol_state,
+            user_facing_evidence=result.user_facing_evidence,
+        )
 
     async def list_transactions(self, user: User, session_id: str) -> dict:
         session = await self._owned_session(user.id, session_id)
@@ -298,27 +388,41 @@ class ResearchLabService:
             verified_at=datetime.now(UTC),
         )
         if result.passed:
-            session.status = ResearchLabSessionStatus.PASSED.value
+            session.status = ResearchLabSessionStatus.VERIFIED.value
+            session.impact_verified = True
+            session.verified_evidence_refs_json = result.verified_evidence_refs
             session.objective_progress = len(manifest.objectives)
-            await self._repository.update_session(session)
+        else:
+            session.objective_progress = max(session.objective_progress, 3)
+        await self._repository.update_session(session)
         return {
             "session_id": session.id,
+            "sessionId": session.id,
             "objective_ref": result.objective_ref,
+            "objectiveRef": result.objective_ref,
             "passed": result.passed,
-            "phase": _phase_for(session),
-            "exploitVerified": result.passed,
-            "reportUnlocked": result.passed,
+            "impactVerified": session.impact_verified,
+            "verifiedEvidenceRefs": session.verified_evidence_refs_json,
+            "reportUnlocked": session.impact_verified,
+            "certificateUnlockable": _certificate_unlockable(session),
+            "phase": _phase_for(session, transaction_count=await self._repository.count_transactions(session.id)),
+            "evidence": result.evidence,
+            "failureReason": result.failure_reason,
             "userFacingEvidence": result.user_facing_evidence,
         }
 
     async def get_report(self, user: User, session_id: str) -> dict:
         session = await self._owned_session(user.id, session_id)
-        if session.status != ResearchLabSessionStatus.PASSED.value:
+        if not session.impact_verified:
             return {
                 "session_id": session.id,
                 "status": ResearchLabReportStatus.LOCKED.value,
+                "impactVerified": False,
+                "reportUnlocked": False,
                 "fields": None,
-                "feedback": "Verify exploit impact in the sandbox to unlock the research report.",
+                "feedback": "Verify exploit impact in the sandbox to unlock the audit report.",
+                "verifiedEvidenceRefs": [],
+                "certificateUnlockable": False,
             }
 
         report = await self._repository.get_report(session.id)
@@ -328,9 +432,18 @@ class ResearchLabService:
                 status=ResearchLabReportStatus.DRAFT.value,
                 fields=_empty_report_fields(),
                 feedback=None,
+                impact_verified=session.impact_verified,
                 include_allowed_values=True,
+                verified_evidence_refs=session.verified_evidence_refs_json,
+                certificate_unlockable=_certificate_unlockable(session),
             )
-        return _stored_report_payload(report, include_allowed_values=True)
+        return _stored_report_payload(
+            report,
+            impact_verified=session.impact_verified,
+            include_allowed_values=True,
+            verified_evidence_refs=session.verified_evidence_refs_json,
+            certificate_unlockable=_certificate_unlockable(session),
+        )
 
     async def save_report_draft(
         self, user: User, session_id: str, fields: dict[str, str | None]
@@ -351,20 +464,37 @@ class ResearchLabService:
             submitted_at=None,
             accepted_at=None,
         )
-        return _stored_report_payload(model, include_updated_at=True)
+        return _stored_report_payload(
+            model,
+            impact_verified=session.impact_verified,
+            include_updated_at=True,
+            verified_evidence_refs=session.verified_evidence_refs_json,
+            certificate_unlockable=_certificate_unlockable(session),
+        )
 
     async def submit_report(self, user: User, session_id: str) -> dict:
         session = await self._owned_report_session(user.id, session_id)
+        if not session.finding_review_passed:
+            raise ConflictError("Pass the finding review before submitting the audit report")
         manifest = _manifest_for(session.lab_id)
         report = await self._repository.get_report(session.id)
         fields = report.fields_json if report is not None else _empty_report_fields()
         validation = _validate_report(session.lab_id, fields)
+        evidence_refs = list(fields.get("verifiedEvidenceRefs") or [])
+        if not evidence_refs:
+            validation["accepted"] = False
+            validation["failed_checks"] = list(validation["failed_checks"]) + ["verifiedEvidenceRefs"]
+        elif not set(evidence_refs).issubset(set(session.verified_evidence_refs_json)):
+            validation["accepted"] = False
+            validation["failed_checks"] = list(validation["failed_checks"]) + ["verifiedEvidenceRefs"]
         now = datetime.now(UTC)
 
         if validation["accepted"]:
             xp_awarded = await self._award_xp_once(user, session, manifest, now)
+            session.status = ResearchLabSessionStatus.COMPLETED.value
             session.completed_at = now
             session.xp_awarded = max(session.xp_awarded, xp_awarded)
+            session.audit_report_builder_passed = True
             await self._repository.update_session(session)
             model = await self._repository.upsert_report(
                 session_id=session.id,
@@ -373,8 +503,8 @@ class ResearchLabService:
                 status=ResearchLabReportStatus.ACCEPTED.value,
                 fields=_normalize_report_fields(fields),
                 feedback=(
-                    "Report accepted. Vulnerability, impact, and remediation are correctly "
-                    "identified."
+                    "Audit report accepted. Evidence, severity, root cause, and mitigation "
+                    "align with the verified account substitution impact."
                 ),
                 validation_result=validation,
                 submitted_at=now,
@@ -382,29 +512,107 @@ class ResearchLabService:
             )
             return {
                 "session_id": session.id,
+                "sessionId": session.id,
                 "status": model.status,
                 "lab_completed": True,
+                "labCompleted": True,
                 "xp_awarded": xp_awarded,
+                "xpAwarded": xp_awarded,
                 "feedback": model.feedback,
+                "certificateUnlockable": _certificate_unlockable(session),
             }
 
+        session.audit_report_builder_passed = False
+        await self._repository.update_session(session)
         model = await self._repository.upsert_report(
             session_id=session.id,
             user_id=user.id,
             lab_id=session.lab_id,
             status=ResearchLabReportStatus.RETRY.value,
             fields=_normalize_report_fields(fields),
-            feedback="Root cause or remediation does not match this lab's vulnerability model.",
+            feedback="Report option IDs do not match the verified RL1 vulnerability model.",
             validation_result=validation,
             submitted_at=now,
             accepted_at=None,
         )
         return {
             "session_id": session.id,
+            "sessionId": session.id,
             "status": model.status,
             "lab_completed": False,
+            "labCompleted": False,
             "xp_awarded": 0,
+            "xpAwarded": 0,
             "feedback": model.feedback,
+            "certificateUnlockable": _certificate_unlockable(session),
+        }
+
+    async def get_finding_review(self, user: User, session_id: str) -> dict:
+        session = await self._owned_session(user.id, session_id)
+        if not session.impact_verified:
+            return {
+                "session_id": session.id,
+                "status": "locked",
+                "impactVerified": False,
+                "reportUnlocked": False,
+                "findingReviewPassed": False,
+                "findingReviewAttempts": session.finding_review_attempts,
+                "failedQuestionIds": [],
+                "criticalQuestionsPassed": False,
+                "certificateUnlockable": False,
+                "feedback": "Verify exploit impact to unlock the finding review.",
+            }
+        return {
+            "session_id": session.id,
+            "status": (
+                "passed"
+                if session.finding_review_passed
+                else "retry" if session.finding_review_attempts > 0 else "draft"
+            ),
+            "impactVerified": session.impact_verified,
+            "reportUnlocked": session.impact_verified,
+            "findingReviewPassed": session.finding_review_passed,
+            "findingReviewAttempts": session.finding_review_attempts,
+            "failedQuestionIds": session.failed_question_ids_json,
+            "criticalQuestionsPassed": session.critical_questions_passed,
+            "score": session.finding_review_score,
+            "feedback": session.finding_review_feedback,
+            "certificateUnlockable": _certificate_unlockable(session),
+            "questions": [
+                {
+                    "id": question_id,
+                    "critical": bool(config["critical"]),
+                }
+                for question_id, config in RL1_FINDING_REVIEW_QUESTIONS.items()
+            ],
+        }
+
+    async def submit_finding_review(
+        self, user: User, session_id: str, answers: dict[str, str]
+    ) -> dict:
+        session = await self._owned_session(user.id, session_id)
+        if not session.impact_verified:
+            raise ConflictError("Verify exploit impact before submitting the finding review")
+        validation = _validate_finding_review(answers)
+        session.finding_review_attempts += 1
+        session.finding_review_answers_json = answers
+        session.finding_review_score = validation["score"]
+        session.failed_question_ids_json = validation["failed_question_ids"]
+        session.critical_questions_passed = validation["critical_questions_passed"]
+        session.finding_review_passed = validation["passed"]
+        session.finding_review_feedback = validation["feedback"]
+        await self._repository.update_session(session)
+        return {
+            "session_id": session.id,
+            "status": "passed" if validation["passed"] else "retry",
+            "findingReviewPassed": session.finding_review_passed,
+            "findingReviewAttempts": session.finding_review_attempts,
+            "failedQuestionIds": session.failed_question_ids_json,
+            "criticalQuestionsPassed": session.critical_questions_passed,
+            "score": session.finding_review_score,
+            "feedback": session.finding_review_feedback,
+            "reportUnlocked": session.impact_verified,
+            "certificateUnlockable": _certificate_unlockable(session),
         }
 
     async def terminal_events(
@@ -433,6 +641,16 @@ class ResearchLabService:
             )
         session.status = ResearchLabSessionStatus.ACTIVE.value
         session.objective_progress = 1
+        session.impact_verified = False
+        session.verified_evidence_refs_json = []
+        session.finding_review_passed = False
+        session.finding_review_attempts = 0
+        session.finding_review_score = 0
+        session.finding_review_answers_json = {}
+        session.failed_question_ids_json = []
+        session.critical_questions_passed = False
+        session.finding_review_feedback = None
+        session.audit_report_builder_passed = False
         session.completed_at = None
         await self._repository.append_terminal_events(
             session_id=session.id,
@@ -443,7 +661,14 @@ class ResearchLabService:
         )
         await self._repository.update_session(session)
         terminal = await self._repository.list_terminal_events(session.id, None)
-        return _session_payload(session, manifest, files, terminal_events=terminal)
+        return _session_payload(
+            session,
+            manifest,
+            files,
+            terminal_events=terminal,
+            transaction_count=0,
+            report_status=ResearchLabReportStatus.LOCKED.value,
+        )
 
     async def _owned_session(self, user_id: str, session_id: str) -> ResearchLabSessionModel:
         session = await self._repository.get_session(session_id)
@@ -463,6 +688,8 @@ class ResearchLabService:
         session = await self._owned_session(user_id, session_id)
         if session.status in {
             ResearchLabSessionStatus.PASSED.value,
+            ResearchLabSessionStatus.VERIFIED.value,
+            ResearchLabSessionStatus.COMPLETED.value,
             ResearchLabSessionStatus.DESTROYED.value,
             ResearchLabSessionStatus.EXPIRED.value,
         }:
@@ -471,7 +698,7 @@ class ResearchLabService:
 
     async def _owned_report_session(self, user_id: str, session_id: str) -> ResearchLabSessionModel:
         session = await self._owned_session(user_id, session_id)
-        if session.status != ResearchLabSessionStatus.PASSED.value:
+        if not session.impact_verified:
             raise ConflictError("Verify exploit impact to unlock the research report")
         return session
 
@@ -500,7 +727,7 @@ class ResearchLabService:
 
 def _manifest_for(lab_id: str) -> ResearchLabManifest:
     for lab in RESEARCH_LABS:
-        if lab.id == lab_id or lab.slug == lab_id:
+        if lab.id == lab_id or lab.slug == lab_id or lab_id in lab.aliases:
             return lab
     raise NotFoundError("Research lab not found")
 
@@ -541,23 +768,35 @@ def _session_payload(
     files: list[ResearchLabFileModel],
     *,
     terminal_events: list[ResearchLabTerminalEventModel],
+    transaction_count: int,
+    report_status: str,
     latest_test_run: ResearchLabTestRunModel | None = None,
 ) -> dict:
-    phase = _phase_for(session)
-    report_unlocked = session.status == ResearchLabSessionStatus.PASSED.value
+    phase = _phase_for(session, transaction_count=transaction_count)
+    report_unlocked = session.impact_verified
     return {
         "session_id": session.id,
         "sessionId": session.id,
         "lab_id": session.lab_id,
         "labId": session.lab_id,
         "lab_slug": session.lab_slug,
+        "labSlug": session.lab_slug,
         "labVersion": manifest.version,
         "status": session.status,
         "sandboxStatus": _sandbox_status_for(session),
-        "stage": _stage_for(session),
+        "stage": phase.lower(),
         "phase": phase,
-        "exploitVerified": report_unlocked,
+        "impactVerified": session.impact_verified,
+        "verifiedEvidenceRefs": session.verified_evidence_refs_json,
         "reportUnlocked": report_unlocked,
+        "reportStatus": report_status,
+        "findingReviewPassed": session.finding_review_passed,
+        "findingReviewAttempts": session.finding_review_attempts,
+        "failedQuestionIds": session.failed_question_ids_json,
+        "criticalQuestionsPassed": session.critical_questions_passed,
+        "auditReportBuilderPassed": session.audit_report_builder_passed,
+        "certificateUnlockable": _certificate_unlockable(session),
+        "labCompleted": session.completed_at is not None,
         "visibleTabs": _visible_tabs_for(phase),
         "scenarioBriefing": manifest.scenario_briefing,
         "objective_progress": session.objective_progress,
@@ -578,20 +817,15 @@ def _session_payload(
     }
 
 
-def _stage_for(session: ResearchLabSessionModel) -> str:
-    phase = _phase_for(session)
-    return phase.lower()
-
-
-def _phase_for(session: ResearchLabSessionModel) -> str:
+def _phase_for(session: ResearchLabSessionModel, *, transaction_count: int) -> str:
     if session.completed_at is not None:
         return "COMPLETED"
-    if session.status == ResearchLabSessionStatus.PASSED.value:
-        return "REPORT"
-    if session.status == ResearchLabSessionStatus.RUNNING_TESTS.value:
-        return "PROVE_IMPACT"
-    if session.objective_progress >= 3:
-        return "PROVE_IMPACT"
+    if session.impact_verified:
+        return "SUBMIT_FINDING"
+    if transaction_count > 0 and session.objective_progress >= 3:
+        return "EVIDENCE_REVIEW"
+    if transaction_count > 0:
+        return "EXECUTE_EXPLOIT"
     return "INSPECT"
 
 
@@ -609,7 +843,8 @@ def _sandbox_status_for(session: ResearchLabSessionModel) -> str:
 
 def _visible_tabs_for(phase: str) -> list[str]:
     tabs = ["CODE", "ACCOUNTS", "EXPLOIT", "TRANSACTIONS_LOGS"]
-    if phase in {"REPORT", "COMPLETED"}:
+    if phase in {"SUBMIT_FINDING", "COMPLETED"}:
+        tabs.append("FINDING_REVIEW")
         tabs.append("REPORT")
     return tabs
 
@@ -659,7 +894,10 @@ def _account_snapshot_payload(account: SandboxAccountSnapshot) -> dict:
 
 
 def _transaction_payload(
-    transaction: ResearchLabTransactionModel, *, user_facing_evidence: list[str] | None = None
+    transaction: ResearchLabTransactionModel,
+    *,
+    user_facing_evidence: list[str] | None = None,
+    protocol_state: dict | None = None,
 ) -> dict:
     return {
         "transaction_ref": transaction.transaction_ref,
@@ -669,6 +907,11 @@ def _transaction_payload(
         "execution_status": transaction.execution_status,
         "executionStatus": transaction.execution_status,
         "logs": transaction.logs_json,
+        "account_deltas": transaction.account_deltas_json,
+        "accountDeltas": transaction.account_deltas_json,
+        "evidence_refs": transaction.evidence_refs_json,
+        "evidenceRefs": transaction.evidence_refs_json,
+        "protocolState": protocol_state or {},
         "submitted_at": transaction.submitted_at.isoformat(),
         "submittedAt": transaction.submitted_at.isoformat(),
         "userFacingEvidence": user_facing_evidence or [],
@@ -677,28 +920,20 @@ def _transaction_payload(
 
 def _empty_report_fields() -> dict[str, str | None]:
     return {
-        "vulnerability_category": None,
-        "affected_area": None,
-        "attacker_controlled_input": None,
-        "root_cause": "",
-        "impact": "",
-        "proof": "",
-        "recommended_fix": "",
-        "severity": None,
+        "titleOptionId": None,
+        "severityOptionId": None,
+        "likelihoodOptionId": None,
+        "categoryOptionId": None,
+        "rootCauseOptionId": None,
+        "proofOfImpactOptionId": None,
+        "recommendedMitigationOptionId": None,
+        "verifiedEvidenceRefs": [],
+        "optionalNotes": None,
     }
 
 
-def _allowed_report_values() -> dict[str, list[str]]:
-    return {
-        "vulnerability_category": ["missing_validation", "arithmetic_safety"],
-        "affected_area": ["deposit_instruction", "vault_health_calculation"],
-        "attacker_controlled_input": [
-            "collateral_token_account",
-            "collateral_mint",
-            "vault_account",
-        ],
-        "severity": ["low", "medium", "high"],
-    }
+def _allowed_report_values() -> dict[str, list[dict[str, str]]]:
+    return RL1_REPORT_OPTIONS.copy()
 
 
 def _normalize_report_fields(fields: dict) -> dict[str, str | None]:
@@ -706,7 +941,10 @@ def _normalize_report_fields(fields: dict) -> dict[str, str | None]:
     normalized = {}
     for key, default in defaults.items():
         value = fields.get(key, default)
-        normalized[key] = value.strip() if isinstance(value, str) else value
+        if isinstance(default, list):
+            normalized[key] = [item for item in value or [] if isinstance(item, str)]
+        else:
+            normalized[key] = value.strip() if isinstance(value, str) else value
     return normalized
 
 
@@ -716,14 +954,21 @@ def _report_payload(
     status: str,
     fields: dict[str, str | None],
     feedback: str | None,
+    impact_verified: bool,
     include_allowed_values: bool = False,
+    verified_evidence_refs: list[str] | None = None,
+    certificate_unlockable: bool = False,
     updated_at: str | None = None,
 ) -> dict:
     payload = {
         "session_id": session_id,
         "status": status,
+        "impactVerified": impact_verified,
+        "reportUnlocked": impact_verified,
         "fields": fields,
         "feedback": feedback,
+        "verifiedEvidenceRefs": verified_evidence_refs or [],
+        "certificateUnlockable": certificate_unlockable,
     }
     if include_allowed_values:
         payload["allowed_values"] = _allowed_report_values()
@@ -735,84 +980,82 @@ def _report_payload(
 def _stored_report_payload(
     report: ResearchLabReportModel,
     *,
+    impact_verified: bool,
     include_allowed_values: bool = False,
     include_updated_at: bool = False,
+    verified_evidence_refs: list[str] | None = None,
+    certificate_unlockable: bool = False,
 ) -> dict:
     return _report_payload(
         session_id=report.session_id,
         status=report.status,
         fields=_normalize_report_fields(report.fields_json),
         feedback=report.feedback,
+        impact_verified=impact_verified,
         include_allowed_values=include_allowed_values,
+        verified_evidence_refs=verified_evidence_refs,
+        certificate_unlockable=certificate_unlockable,
         updated_at=report.updated_at.isoformat() if include_updated_at else None,
     )
 
 
 def _validate_report(lab_id: str, fields: dict) -> dict:
     normalized = _normalize_report_fields(fields)
-    if lab_id in {"rl-001", "treasury-mirage", "rl-000", "mint-gate"}:
-        return _validate_against_model(
-            normalized,
-            expected_category="missing_validation",
-            expected_area="deposit_instruction",
-            accepted_severities={"medium"},
-            root_cause_groups=[["missing", "validation"], ["mint"], ["token", "account"]],
-            impact_groups=[["counterfeit", "fake"], ["credit", "withdraw", "treasury"]],
-            fix_groups=[["check", "validate", "require"], ["mint"], ["accepted", "official"]],
-        )
-    if lab_id in {"rl-007", "vault-mirage"}:
-        return _validate_against_model(
-            normalized,
-            expected_category="arithmetic_safety",
-            expected_area="vault_health_calculation",
-            accepted_severities={"medium", "high"},
-            root_cause_groups=[
-                ["unchecked", "overflow", "checked"],
-                ["multiplication", "division", "scaling", "scale"],
-            ],
-            impact_groups=[
-                ["distort", "distorted", "incorrect", "inflated"],
-                ["collateral", "health"],
-            ],
-            fix_groups=[["checked", "safe"], ["arithmetic", "math"], ["comparison", "health"]],
-        )
+    expected = {
+        "titleOptionId": "missing_constraints_counterfeit_credit",
+        "severityOptionId": "high_treasury_loss",
+        "likelihoodOptionId": "medium_high_attacker_supplied_accounts",
+        "categoryOptionId": "account_substitution",
+        "rootCauseOptionId": "missing_account_binding",
+        "proofOfImpactOptionId": "counterfeit_credit_withdraws_treasury",
+        "recommendedMitigationOptionId": "bind_accounts_to_approved_config",
+    }
+    failed = [
+        key for key, expected_value in expected.items() if normalized.get(key) != expected_value
+    ]
+    if not normalized.get("verifiedEvidenceRefs"):
+        failed.append("verifiedEvidenceRefs")
+    return {"accepted": not failed, "failed_checks": failed}
+
+
+def _validate_finding_review(answers: dict[str, str]) -> dict[str, object]:
+    failed_question_ids: list[str] = []
+    failed_critical_questions: list[str] = []
+    total = len(RL1_FINDING_REVIEW_QUESTIONS)
+    for question_id, config in RL1_FINDING_REVIEW_QUESTIONS.items():
+        if answers.get(question_id) != config["correct"]:
+            failed_question_ids.append(question_id)
+            if bool(config["critical"]):
+                failed_critical_questions.append(question_id)
+    score = int(round(((total - len(failed_question_ids)) / total) * 100))
+    critical_questions_passed = len(failed_critical_questions) == 0
+    passed = score >= 80 and critical_questions_passed
+    feedback = (
+        "Finding review passed. Backend-confirmed exploit impact can now support the audit report."
+        if passed
+        else "Finding review failed. One or more critical exploit-understanding questions are incorrect."
+    )
     return {
-        "accepted": False,
-        "failed_checks": ["unsupported_lab"],
+        "passed": passed,
+        "score": score,
+        "failed_question_ids": failed_question_ids,
+        "critical_questions_passed": critical_questions_passed,
+        "feedback": feedback,
     }
 
 
-def _validate_against_model(
-    fields: dict[str, str | None],
-    *,
-    expected_category: str,
-    expected_area: str,
-    accepted_severities: set[str],
-    root_cause_groups: list[list[str]],
-    impact_groups: list[list[str]],
-    fix_groups: list[list[str]],
-) -> dict:
-    failed = []
-    if fields["vulnerability_category"] != expected_category:
-        failed.append("vulnerability_category")
-    if fields["affected_area"] != expected_area:
-        failed.append("affected_area")
-    if fields["severity"] not in accepted_severities:
-        failed.append("severity")
-    if not _has_concepts(str(fields["root_cause"] or ""), root_cause_groups):
-        failed.append("root_cause")
-    if not _has_concepts(str(fields["impact"] or ""), impact_groups):
-        failed.append("impact")
-    if not _has_concepts(str(fields["recommended_fix"] or ""), fix_groups):
-        failed.append("recommended_fix")
-    if len(str(fields["proof"] or "").strip()) < 20:
-        failed.append("proof")
-    return {
-        "accepted": not failed,
-        "failed_checks": failed,
-    }
+def _certificate_unlockable(session: ResearchLabSessionModel) -> bool:
+    return bool(
+        session.impact_verified
+        and session.finding_review_passed
+        and session.audit_report_builder_passed
+        and session.verified_evidence_refs_json
+    )
 
 
-def _has_concepts(value: str, concept_groups: list[list[str]]) -> bool:
-    normalized = value.lower()
-    return all(any(term in normalized for term in group) for group in concept_groups)
+def _report_status_for(session: ResearchLabSessionModel) -> str:
+    if session.audit_report_builder_passed:
+        return ResearchLabReportStatus.ACCEPTED.value
+    if session.impact_verified:
+        return ResearchLabReportStatus.DRAFT.value
+    return ResearchLabReportStatus.LOCKED.value

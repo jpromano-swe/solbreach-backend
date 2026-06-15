@@ -8,6 +8,9 @@ from typing import Any
 class ResearchLabSessionStatus(StrEnum):
     PROVISIONING = "provisioning"
     ACTIVE = "active"
+    RUNNING = "running"
+    VERIFIED = "verified"
+    COMPLETED = "completed"
     DIRTY = "dirty"
     RUNNING_TESTS = "running_tests"
     PASSED = "passed"
@@ -45,6 +48,7 @@ class ResearchLabManifest:
     id: str
     version: str
     slug: str
+    aliases: list[str]
     lab_code: str
     title: str
     difficulty: str
@@ -95,69 +99,73 @@ class ResearchLabManifest:
         return data
 
 
-TREASURY_MIRAGE_MANIFEST = ResearchLabManifest(
-    id="rl-001",
+RL1_ACCOUNT_SUBSTITUTION_MANIFEST = ResearchLabManifest(
+    id="rl1-account-substitution",
     version="1.0.0",
-    slug="treasury-mirage",
+    slug="account-substitution",
+    aliases=["rl-001"],
     lab_code="RL1",
-    title="Treasury Mirage",
+    title="Account Substitution",
     difficulty="intermediate",
     estimated_time="45-75 minutes",
     xp_reward=250,
     status="active",
     summary=(
-        "A small treasury-backed collateral vault reports unauthorized withdrawals. "
-        "Inspect the protocol path and prove whether attacker-controlled account inputs "
-        "can create illegitimate credit."
+        "Inspect a vault-style collateral flow and prove whether non-canonical account "
+        "relationships can mint illegitimate protocol credit and drain treasury value."
     ),
     scenario_briefing=(
-        "The treasury team accepts collateral before allowing withdrawals from a protected "
-        "vault. A withdrawal occurred without approved collateral entering the system. Your "
-        "task is to inspect the visible program logic, review sandbox accounts, execute a "
-        "controlled exploit attempt, and prove impact from runtime state."
+        "The protocol credits positions when collateral is deposited, then allows value to be "
+        "withdrawn from a protected treasury. Your job is to inspect the visible program logic, "
+        "submit controlled exploit actions, review the resulting evidence, and prove whether a "
+        "missing account binding allows illegitimate treasury withdrawal."
     ),
     objective=(
-        "Prove that a counterfeit collateral account can be credited and used to withdraw "
-        "legitimate treasury value in the sandbox."
+        "Prove that missing account binding lets a caller substitute non-canonical collateral "
+        "and vault relationships, receive illegitimate credit, then withdraw real protocol "
+        "treasury value."
     ),
     allowed_files=["programs/treasury_mirage/src/lib.rs"],
     entry_file="programs/treasury_mirage/src/lib.rs",
     test_command="",
     template_ref="research-labs/treasury-mirage@v1",
-    objective_ref="RL1_UNAUTHORIZED_TREASURY_WITHDRAWAL",
+    objective_ref="RL1_ACCOUNT_SUBSTITUTION_IMPACT",
     visible_account_refs=[
         "treasury_vault",
-        "accepted_collateral_mint",
-        "counterfeit_collateral_mint",
+        "official_mint_account",
+        "counterfeit_mint_account",
         "attacker_collateral_account",
-        "attacker_position",
+        "official_collateral_account",
+        "counterfeit_vault_account",
+        "official_vault_account",
+        "position",
         "attacker_reward_account",
     ],
     objectives=[
-        "Inspect the collateral deposit and withdrawal behavior",
-        "Compare approved and attacker-controlled collateral accounts",
-        "Submit an exploit attempt in the sandbox",
-        "Verify unauthorized treasury value movement",
+        "Inspect the collateral and treasury account relationships",
+        "Execute controlled exploit actions in the sandbox",
+        "Review transaction and account evidence",
+        "Prove unauthorized treasury withdrawal from invalid credit",
     ],
     hints=[
         ResearchLabHint(
             id="account-substitution",
             title="Hint 1",
             body=(
-                "Focus on whether the deposit path proves the submitted collateral account "
-                "belongs to the accepted mint."
+                "Focus on whether the deposit path binds the submitted collateral source and "
+                "vault destination to an approved relationship."
             ),
         ),
         ResearchLabHint(
             id="credit-boundary",
             title="Hint 2",
             body=(
-                "The withdrawal path trusts position credit. Determine whether that credit can "
-                "be produced from unapproved collateral."
+                "The withdrawal path trusts stored position credit. Determine whether invalid "
+                "credit can be created before treasury value moves."
             ),
         ),
     ],
 )
 
 
-RESEARCH_LABS = [TREASURY_MIRAGE_MANIFEST]
+RESEARCH_LABS = [RL1_ACCOUNT_SUBSTITUTION_MANIFEST]

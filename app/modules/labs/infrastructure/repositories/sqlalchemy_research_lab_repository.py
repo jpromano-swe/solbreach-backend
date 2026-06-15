@@ -273,6 +273,8 @@ class SQLAlchemyResearchLabRepository:
         parameters: dict,
         execution_status: str,
         logs: list[str],
+        account_deltas: list[dict],
+        evidence_refs: list[str],
         submitted_at: datetime,
         idempotency_key: str,
     ) -> ResearchLabTransactionModel:
@@ -293,6 +295,8 @@ class SQLAlchemyResearchLabRepository:
             parameters_json=parameters,
             execution_status=execution_status,
             logs_json=logs,
+            account_deltas_json=account_deltas,
+            evidence_refs_json=evidence_refs,
             submitted_at=submitted_at,
             idempotency_key=idempotency_key,
             sequence_number=max_seq + 1,
@@ -321,6 +325,8 @@ class SQLAlchemyResearchLabRepository:
                     parameters_json=parameters,
                     execution_status=execution_status,
                     logs_json=logs,
+                    account_deltas_json=account_deltas,
+                    evidence_refs_json=evidence_refs,
                     submitted_at=submitted_at,
                     sequence_number=max_seq + 1,
                 )
@@ -338,6 +344,14 @@ class SQLAlchemyResearchLabRepository:
             .order_by(ResearchLabTransactionModel.submitted_at.asc())
         )
         return list(result.scalars().all())
+
+    async def count_transactions(self, session_id: str) -> int:
+        result = await self._session.execute(
+            select(func.count(ResearchLabTransactionModel.id)).where(
+                ResearchLabTransactionModel.session_id == session_id
+            )
+        )
+        return int(result.scalar_one() or 0)
 
     async def get_transaction(
         self, session_id: str, transaction_ref: str

@@ -27,7 +27,8 @@ provider:
     RESEARCH_LAB_SESSION_TTL_HOURS: ${env:RESEARCH_LAB_SESSION_TTL_HOURS, '4'}
     RESEARCH_LAB_TEST_TIMEOUT_SECONDS: ${env:RESEARCH_LAB_TEST_TIMEOUT_SECONDS, '120'}
     RESEARCH_LAB_MAX_FILE_SIZE_BYTES: ${env:RESEARCH_LAB_MAX_FILE_SIZE_BYTES, '100000'}
-    DEPLOY_VERSION: coldstart-20260528-001
+    DEPLOY_VERSION: ${env:DEPLOY_VERSION, 'coldstart-20260528-001'}
+    DEPLOY_COMMIT_SHA: ${env:DEPLOY_COMMIT_SHA, ''}
   apiGateway:
     binaryMediaTypes:
       - "multipart/form-data"
@@ -43,7 +44,7 @@ plugins:
 custom:
   pythonRequirements:
     dockerizePip: true
-    usePoetry: true
+    usePoetry: false
     slim: false
     strip: false
     layer: false

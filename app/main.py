@@ -59,7 +59,13 @@ def create_app() -> FastAPI:
 
     @app.get("/health", tags=["system"])
     async def health() -> dict[str, str]:
-        return {"status": "ok"}
+        return {
+            "status": "ok",
+            "stage": os.getenv("STAGE", ""),
+            "environment": os.getenv("ENVIRONMENT", ""),
+            "deploy_version": os.getenv("DEPLOY_VERSION", ""),
+            "deploy_commit_sha": os.getenv("DEPLOY_COMMIT_SHA", ""),
+        }
 
     return app
 

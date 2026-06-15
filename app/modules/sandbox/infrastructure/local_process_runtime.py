@@ -147,17 +147,17 @@ class LocalProcessSandboxRuntime(SandboxRuntime):
         self, session_id: str, action_type: str, parameters: dict
     ) -> SandboxTransactionResult:
         state = self._read_state(session_id)
-        if state["lab_slug"] != "treasury-mirage":
+        if state["lab_slug"] != "account-substitution":
             raise ConflictError("Sandbox transactions are not configured for this lab")
 
         tx_ref = f"tx_{uuid4().hex[:16]}"
         logs: list[str]
         evidence: list[str] = []
         status = "success"
-        if action_type == "deposit_counterfeit_collateral":
+        if action_type in {"deposit_counterfeit_collateral", "DEPOSIT_COLLATERAL"}:
             collateral_ref = parameters.get("collateral_account_ref")
             logs, evidence = _deposit_counterfeit_collateral(state, collateral_ref)
-        elif action_type == "withdraw_treasury_credit":
+        elif action_type in {"withdraw_treasury_credit", "WITHDRAW_AGAINST_CREDIT"}:
             logs, evidence = _withdraw_treasury_credit(state)
         else:
             status = "failure"
@@ -175,6 +175,7 @@ class LocalProcessSandboxRuntime(SandboxRuntime):
             instruction_type=action_type,
             execution_status=status,
             logs=logs,
+            protocol_state={},
             user_facing_evidence=evidence,
         )
 
@@ -189,7 +190,7 @@ class LocalProcessSandboxRuntime(SandboxRuntime):
         self, session_id: str, objective_ref: str
     ) -> SandboxVerificationResult:
         state = self._read_state(session_id)
-        if objective_ref != "RL1_UNAUTHORIZED_TREASURY_WITHDRAWAL":
+        if objective_ref != "RL1_ACCOUNT_SUBSTITUTION_IMPACT":
             raise NotFoundError("Sandbox objective not found")
         position = state["accounts"]["attacker_position"]["data"]
         treasury = state["accounts"]["treasury_vault"]
@@ -283,7 +284,7 @@ def _test_passed(output: str, test_id: str) -> bool:
 
 def _initial_treasury_mirage_state() -> dict:
     return {
-        "lab_slug": "treasury-mirage",
+        "lab_slug": "account-substitution",
         "initial_treasury_lamports": 1_000_000,
         "initial_reward_lamports": 0,
         "transactions": {},

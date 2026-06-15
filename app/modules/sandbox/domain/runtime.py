@@ -48,6 +48,8 @@ class SandboxTransactionResult:
     instruction_type: str
     execution_status: str
     logs: list[str] = field(default_factory=list)
+    account_deltas: list[dict] = field(default_factory=list)
+    protocol_state: dict = field(default_factory=dict)
     user_facing_evidence: list[str] = field(default_factory=list)
 
 
@@ -56,6 +58,8 @@ class SandboxVerificationResult:
     objective_ref: str
     passed: bool
     evidence: dict
+    verified_evidence_refs: list[str] = field(default_factory=list)
+    failure_reason: str | None = None
     user_facing_evidence: list[str] = field(default_factory=list)
 
 
