@@ -184,6 +184,7 @@ class ResearchLabService:
             terminal_events=terminal,
             transaction_count=0,
             report_status=ResearchLabReportStatus.LOCKED.value,
+            protocol_state=_initial_protocol_state(),
         )
 
     async def get_session(self, user: User, session_id: str) -> dict:
@@ -194,6 +195,9 @@ class ResearchLabService:
         latest_run = await self._repository.latest_test_run(session.id)
         transactions = await self._repository.list_transactions(session.id)
         report = await self._repository.get_report(session.id)
+        latest_protocol_state = (
+            transactions[-1].protocol_state_json if transactions else _initial_protocol_state()
+        )
         return _session_payload(
             session,
             manifest,
@@ -202,6 +206,7 @@ class ResearchLabService:
             latest_test_run=latest_run,
             transaction_count=len(transactions),
             report_status=report.status if report is not None else _report_status_for(session),
+            protocol_state=latest_protocol_state,
         )
 
     async def patch_files(self, user: User, session_id: str, files: list[dict[str, str]]) -> dict:
@@ -344,6 +349,8 @@ class ResearchLabService:
             logs=result.logs,
             account_deltas=result.account_deltas,
             evidence_refs=evidence_refs,
+            protocol_state=result.protocol_state,
+            user_facing_evidence=result.user_facing_evidence,
             submitted_at=datetime.now(UTC),
             idempotency_key=idempotency_key,
         )
@@ -395,6 +402,20 @@ class ResearchLabService:
         else:
             session.objective_progress = max(session.objective_progress, 3)
         await self._repository.update_session(session)
+        logger.info(
+            "research_lab_objective_verified"
+            if result.passed
+            else "research_lab_objective_rejected",
+            extra={
+                "user_id": user.id,
+                "session_id": session.id,
+                "lab_id": manifest.id,
+                "objective_ref": result.objective_ref,
+                "passed": result.passed,
+                "failure_reason": result.failure_reason,
+                "verified_evidence_refs": session.verified_evidence_refs_json,
+            },
+        )
         return {
             "session_id": session.id,
             "sessionId": session.id,
@@ -429,6 +450,7 @@ class ResearchLabService:
         if report is None:
             return _report_payload(
                 session_id=session.id,
+                session_id_alias=session.id,
                 status=ResearchLabReportStatus.DRAFT.value,
                 fields=_empty_report_fields(),
                 feedback=None,
@@ -464,10 +486,21 @@ class ResearchLabService:
             submitted_at=None,
             accepted_at=None,
         )
+        logger.info(
+            "research_lab_report_saved",
+            extra={
+                "user_id": user.id,
+                "session_id": session.id,
+                "lab_id": session.lab_id,
+                "status": model.status,
+                "has_verified_refs": bool(model.fields_json.get("verifiedEvidenceRefs")),
+            },
+        )
         return _stored_report_payload(
             model,
             impact_verified=session.impact_verified,
             include_updated_at=True,
+            include_allowed_values=True,
             verified_evidence_refs=session.verified_evidence_refs_json,
             certificate_unlockable=_certificate_unlockable(session),
         )
@@ -510,17 +543,33 @@ class ResearchLabService:
                 submitted_at=now,
                 accepted_at=now,
             )
-            return {
-                "session_id": session.id,
-                "sessionId": session.id,
-                "status": model.status,
-                "lab_completed": True,
-                "labCompleted": True,
-                "xp_awarded": xp_awarded,
-                "xpAwarded": xp_awarded,
-                "feedback": model.feedback,
-                "certificateUnlockable": _certificate_unlockable(session),
-            }
+            logger.info(
+                "research_lab_report_accepted",
+                extra={
+                    "user_id": user.id,
+                    "session_id": session.id,
+                    "lab_id": session.lab_id,
+                    "xp_awarded": xp_awarded,
+                    "verified_evidence_refs": session.verified_evidence_refs_json,
+                },
+            )
+            payload = _stored_report_payload(
+                model,
+                impact_verified=session.impact_verified,
+                include_allowed_values=True,
+                include_updated_at=True,
+                verified_evidence_refs=session.verified_evidence_refs_json,
+                certificate_unlockable=_certificate_unlockable(session),
+            )
+            payload.update(
+                {
+                    "lab_completed": True,
+                    "labCompleted": True,
+                    "xp_awarded": xp_awarded,
+                    "xpAwarded": xp_awarded,
+                }
+            )
+            return payload
 
         session.audit_report_builder_passed = False
         await self._repository.update_session(session)
@@ -535,17 +584,32 @@ class ResearchLabService:
             submitted_at=now,
             accepted_at=None,
         )
-        return {
-            "session_id": session.id,
-            "sessionId": session.id,
-            "status": model.status,
-            "lab_completed": False,
-            "labCompleted": False,
-            "xp_awarded": 0,
-            "xpAwarded": 0,
-            "feedback": model.feedback,
-            "certificateUnlockable": _certificate_unlockable(session),
-        }
+        logger.warning(
+            "research_lab_report_rejected",
+            extra={
+                "user_id": user.id,
+                "session_id": session.id,
+                "lab_id": session.lab_id,
+                "failed_checks": validation["failed_checks"],
+            },
+        )
+        payload = _stored_report_payload(
+            model,
+            impact_verified=session.impact_verified,
+            include_allowed_values=True,
+            include_updated_at=True,
+            verified_evidence_refs=session.verified_evidence_refs_json,
+            certificate_unlockable=_certificate_unlockable(session),
+        )
+        payload.update(
+            {
+                "lab_completed": False,
+                "labCompleted": False,
+                "xp_awarded": 0,
+                "xpAwarded": 0,
+            }
+        )
+        return payload
 
     async def get_finding_review(self, user: User, session_id: str) -> dict:
         session = await self._owned_session(user.id, session_id)
@@ -668,6 +732,7 @@ class ResearchLabService:
             terminal_events=terminal,
             transaction_count=0,
             report_status=ResearchLabReportStatus.LOCKED.value,
+            protocol_state=_initial_protocol_state(),
         )
 
     async def _owned_session(self, user_id: str, session_id: str) -> ResearchLabSessionModel:
@@ -770,6 +835,7 @@ def _session_payload(
     terminal_events: list[ResearchLabTerminalEventModel],
     transaction_count: int,
     report_status: str,
+    protocol_state: dict,
     latest_test_run: ResearchLabTestRunModel | None = None,
 ) -> dict:
     phase = _phase_for(session, transaction_count=transaction_count)
@@ -790,6 +856,7 @@ def _session_payload(
         "verifiedEvidenceRefs": session.verified_evidence_refs_json,
         "reportUnlocked": report_unlocked,
         "reportStatus": report_status,
+        "protocolState": protocol_state,
         "findingReviewPassed": session.finding_review_passed,
         "findingReviewAttempts": session.finding_review_attempts,
         "failedQuestionIds": session.failed_question_ids_json,
@@ -899,6 +966,12 @@ def _transaction_payload(
     user_facing_evidence: list[str] | None = None,
     protocol_state: dict | None = None,
 ) -> dict:
+    effective_protocol_state = protocol_state or transaction.protocol_state_json or {}
+    treasury_impact_observed = any(
+        int(delta.get("lamportsDelta", 0) or 0) < 0
+        and delta.get("accountRef") == "treasury_vault"
+        for delta in (transaction.account_deltas_json or [])
+    )
     return {
         "transaction_ref": transaction.transaction_ref,
         "transactionRef": transaction.transaction_ref,
@@ -911,10 +984,16 @@ def _transaction_payload(
         "accountDeltas": transaction.account_deltas_json,
         "evidence_refs": transaction.evidence_refs_json,
         "evidenceRefs": transaction.evidence_refs_json,
-        "protocolState": protocol_state or {},
+        "protocolState": effective_protocol_state,
+        "exploitProvenance": effective_protocol_state.get("depositPathType"),
+        "creditedCollateral": effective_protocol_state.get("creditedCollateral"),
+        "maxBorrow": effective_protocol_state.get("maxBorrow"),
+        "availableBorrow": effective_protocol_state.get("availableBorrow"),
+        "borrowedTotal": effective_protocol_state.get("borrowedTotal"),
+        "treasuryImpactObserved": treasury_impact_observed,
         "submitted_at": transaction.submitted_at.isoformat(),
         "submittedAt": transaction.submitted_at.isoformat(),
-        "userFacingEvidence": user_facing_evidence or [],
+        "userFacingEvidence": user_facing_evidence or transaction.user_facing_evidence_json or [],
     }
 
 
@@ -951,6 +1030,7 @@ def _normalize_report_fields(fields: dict) -> dict[str, str | None]:
 def _report_payload(
     *,
     session_id: str,
+    session_id_alias: str | None = None,
     status: str,
     fields: dict[str, str | None],
     feedback: str | None,
@@ -962,6 +1042,7 @@ def _report_payload(
 ) -> dict:
     payload = {
         "session_id": session_id,
+        "sessionId": session_id_alias or session_id,
         "status": status,
         "impactVerified": impact_verified,
         "reportUnlocked": impact_verified,
@@ -972,8 +1053,10 @@ def _report_payload(
     }
     if include_allowed_values:
         payload["allowed_values"] = _allowed_report_values()
+        payload["allowedValues"] = _allowed_report_values()
     if updated_at is not None:
         payload["updated_at"] = updated_at
+        payload["updatedAt"] = updated_at
     return payload
 
 
@@ -988,6 +1071,7 @@ def _stored_report_payload(
 ) -> dict:
     return _report_payload(
         session_id=report.session_id,
+        session_id_alias=report.session_id,
         status=report.status,
         fields=_normalize_report_fields(report.fields_json),
         feedback=report.feedback,
@@ -1016,6 +1100,24 @@ def _validate_report(lab_id: str, fields: dict) -> dict:
     if not normalized.get("verifiedEvidenceRefs"):
         failed.append("verifiedEvidenceRefs")
     return {"accepted": not failed, "failed_checks": failed}
+
+
+def _initial_protocol_state() -> dict:
+    return {
+        "depositPathType": "none",
+        "creditedCollateral": 0,
+        "treasuryLamports": 0,
+        "initialTreasuryLamports": 0,
+        "rewardLamports": 0,
+        "successfulDeposits": [],
+        "successfulWithdrawals": [],
+        "maxBorrow": 0,
+        "availableBorrow": 0,
+        "borrowedTotal": 0,
+        "borrowAllowed": False,
+        "ltvBps": 8000,
+        "maxDrainSatisfied": False,
+    }
 
 
 def _validate_finding_review(answers: dict[str, str]) -> dict[str, object]:

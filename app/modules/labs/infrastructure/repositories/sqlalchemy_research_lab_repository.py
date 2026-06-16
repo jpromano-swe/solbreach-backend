@@ -275,6 +275,8 @@ class SQLAlchemyResearchLabRepository:
         logs: list[str],
         account_deltas: list[dict],
         evidence_refs: list[str],
+        protocol_state: dict,
+        user_facing_evidence: list[str],
         submitted_at: datetime,
         idempotency_key: str,
     ) -> ResearchLabTransactionModel:
@@ -297,6 +299,8 @@ class SQLAlchemyResearchLabRepository:
             logs_json=logs,
             account_deltas_json=account_deltas,
             evidence_refs_json=evidence_refs,
+            protocol_state_json=protocol_state,
+            user_facing_evidence_json=user_facing_evidence,
             submitted_at=submitted_at,
             idempotency_key=idempotency_key,
             sequence_number=max_seq + 1,
@@ -327,6 +331,8 @@ class SQLAlchemyResearchLabRepository:
                     logs_json=logs,
                     account_deltas_json=account_deltas,
                     evidence_refs_json=evidence_refs,
+                    protocol_state_json=protocol_state,
+                    user_facing_evidence_json=user_facing_evidence,
                     submitted_at=submitted_at,
                     sequence_number=max_seq + 1,
                 )

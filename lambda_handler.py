@@ -6,6 +6,13 @@ from mangum import Mangum
 
 logging.basicConfig(level=logging.INFO)
 _log = logging.getLogger("startup")
+_log.info(
+    "solbreach_lambda_coldstart stage=%s environment=%s deploy_version=%s deploy_commit_sha=%s",
+    os.getenv("STAGE", ""),
+    os.getenv("ENVIRONMENT", ""),
+    os.getenv("DEPLOY_VERSION", ""),
+    os.getenv("DEPLOY_COMMIT_SHA", ""),
+)
 _url = os.getenv("DATABASE_URL", "")
 if _url:
     try:
@@ -31,6 +38,8 @@ if _url:
                     ("research_lab_sessions", "audit_report_builder_passed", "BOOLEAN", "false", "audit_report_builder_passed"),
                     ("research_lab_transactions", "account_deltas_json", "JSON", "'[]'::json", "account_deltas_json"),
                     ("research_lab_transactions", "evidence_refs_json", "JSON", "'[]'::json", "evidence_refs_json"),
+                    ("research_lab_transactions", "protocol_state_json", "JSON", "'{}'::json", "protocol_state_json"),
+                    ("research_lab_transactions", "user_facing_evidence_json", "JSON", "'[]'::json", "user_facing_evidence_json"),
                 ]:
                     r = await conn.execute(
                         text("SELECT 1 FROM information_schema.columns "

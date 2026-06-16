@@ -18,6 +18,7 @@ from app.modules.submissions.presentation.api.routes import router as submission
 from app.modules.users.presentation.api.routes import router as users_router
 from app.modules.vulnerabilities.presentation.api.routes import router as vulnerabilities_router
 import os
+from starlette.requests import Request
 
 
 def create_app() -> FastAPI:
@@ -57,10 +58,27 @@ def create_app() -> FastAPI:
         research_labs_router, prefix=f"{prefix}/research-labs", tags=["research-labs"]
     )
 
+    @app.middleware("http")
+    async def attach_deploy_headers(request: Request, call_next):
+        response = await call_next(request)
+        response.headers["X-SolBreach-Stage"] = os.getenv("STAGE", "")
+        response.headers["X-SolBreach-Deploy-Version"] = os.getenv("DEPLOY_VERSION", "")
+        response.headers["X-SolBreach-Deploy-Commit-Sha"] = os.getenv("DEPLOY_COMMIT_SHA", "")
+        return response
+
     @app.get("/health", tags=["system"])
     async def health() -> dict[str, str]:
         return {
             "status": "ok",
+            "stage": os.getenv("STAGE", ""),
+            "environment": os.getenv("ENVIRONMENT", ""),
+            "deploy_version": os.getenv("DEPLOY_VERSION", ""),
+            "deploy_commit_sha": os.getenv("DEPLOY_COMMIT_SHA", ""),
+        }
+
+    @app.get("/version", tags=["system"])
+    async def version() -> dict[str, str]:
+        return {
             "stage": os.getenv("STAGE", ""),
             "environment": os.getenv("ENVIRONMENT", ""),
             "deploy_version": os.getenv("DEPLOY_VERSION", ""),

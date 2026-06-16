@@ -70,7 +70,7 @@ async def test_rl1_account_substitution_full_backend_flow(
     )
     assert detail_response.status_code == 200
     detail = detail_response.json()["data"]
-    assert detail["entry_file"] == "programs/treasury_mirage/src/lib.rs"
+    assert detail["entry_file"] == "programs/account_substitution/src/lib.rs"
     assert "account binding" in detail["objective"].lower()
 
     create_response = await seeded_client.post(
@@ -85,6 +85,7 @@ async def test_rl1_account_substitution_full_backend_flow(
     assert session_data["reportUnlocked"] is False
     assert session_data["reportStatus"] == "locked"
     assert session_data["certificateUnlockable"] is False
+    assert session_data["protocolState"]["depositPathType"] == "none"
 
     locked_finding_response = await seeded_client.get(
         f"/api/v1/research-labs/sessions/{session_id}/finding-review", headers=headers
@@ -154,6 +155,7 @@ async def test_rl1_account_substitution_full_backend_flow(
     assert verified["evidence"]["impactChecklist"]["realProtocolTreasuryValueDecreased"] is True
     assert verified["evidence"]["impactChecklist"]["maxDrainSatisfied"] is True
     assert verified["evidence"]["borrowedAmount"] == EXPLOIT_MAX_BORROW
+    assert verified["evidence"]["maxBorrowAmount"] == EXPLOIT_MAX_BORROW
 
     draft_report_response = await seeded_client.get(
         f"/api/v1/research-labs/sessions/{session_id}/report", headers=headers
@@ -202,6 +204,8 @@ async def test_rl1_account_substitution_full_backend_flow(
     assert retry["status"] == "retry"
     assert retry["labCompleted"] is False
     assert retry["certificateUnlockable"] is False
+    assert retry["fields"]["titleOptionId"] == "wrong-title"
+    assert retry["allowedValues"]["titleOptionId"][0]["id"] == "missing_constraints_counterfeit_credit"
 
     accepted_report_response = await seeded_client.put(
         f"/api/v1/research-labs/sessions/{session_id}/report",
@@ -218,6 +222,8 @@ async def test_rl1_account_substitution_full_backend_flow(
     assert accepted["labCompleted"] is True
     assert accepted["xpAwarded"] == 250
     assert accepted["certificateUnlockable"] is True
+    assert accepted["fields"]["titleOptionId"] == "missing_constraints_counterfeit_credit"
+    assert accepted["verifiedEvidenceRefs"] == verified["verifiedEvidenceRefs"]
 
     completed_session_response = await seeded_client.get(
         f"/api/v1/research-labs/sessions/{session_id}", headers=headers

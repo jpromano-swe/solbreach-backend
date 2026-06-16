@@ -1,6 +1,7 @@
 import time
 import hmac
 import hashlib
+from types import SimpleNamespace
 from uuid import uuid4
 from pathlib import Path
 
@@ -21,6 +22,8 @@ from app.core.exceptions.domain import NotFoundError
 from app.modules.sandbox.domain.runtime import (
     SandboxAccountSnapshot,
     SandboxAccountSummary,
+    resolve_lab_file_path,
+    resolve_lab_template_ref,
     SandboxRuntime,
     SandboxTerminalEvent,
     SandboxTestResult,
@@ -180,12 +183,16 @@ def _derive_protocol_state(
     borrowed_total = max(reward_lamports - INITIAL_REWARD_LAMPORTS, 0)
     if successful_withdrawals:
         borrowed_total = sum(item["amount"] for item in successful_withdrawals)
-    borrow_quote = _borrow_quote(credited_collateral, treasury_lamports, borrowed_total)
+    quoted_collateral = credited_collateral + borrowed_total
+    quoted_treasury = treasury_lamports + borrowed_total
+    borrow_quote = _borrow_quote(quoted_collateral, quoted_treasury, borrowed_total)
 
     return {
         "depositPathType": deposit_path_type,
         "creditedCollateral": credited_collateral,
+        "quotedCollateral": quoted_collateral,
         "treasuryLamports": treasury_lamports,
+        "initialTreasuryLamports": INITIAL_TREASURY_LAMPORTS,
         "rewardLamports": reward_lamports,
         "successfulDeposits": successful_deposits,
         "successfulWithdrawals": successful_withdrawals,
@@ -293,6 +300,8 @@ class SessionMaterializer:
         }
 
     def _derive_keypair(self, role: str) -> Keypair:
+        # Keep the original runtime namespace stable so existing session IDs replay to
+        # the same deterministic accounts even though the learner-facing lab identity is RL1.
         msg = f"treasury-mirage|v1|{self.session_id}|{role}".encode()
         return Keypair.from_seed(hmac.new(self._secret, msg, hashlib.sha256).digest()[:32])
 
@@ -303,8 +312,7 @@ class SessionMaterializer:
         if load_program:
             so_path = (
                 self.template_root
-                / "research-labs"
-                / "treasury-mirage@v1"
+                / resolve_lab_template_ref("research-labs/account-substitution@v1")
                 / "treasury_mirage.so"
             )
             resolved = str(so_path.resolve())
@@ -489,7 +497,11 @@ class LiteSVMSandboxRuntime(SandboxRuntime):
         pass
 
     async def read_file(self, session_id: str, path: str) -> str:
-        file_path = (self._template_root / "research-labs" / "treasury-mirage@v1" / path).resolve()
+        file_path = (
+            self._template_root
+            / resolve_lab_template_ref("research-labs/account-substitution@v1")
+            / resolve_lab_file_path(path)
+        ).resolve()
         if file_path.exists() and file_path.is_file():
             return file_path.read_text(encoding="utf-8")
         return ""
@@ -671,7 +683,16 @@ class LiteSVMSandboxRuntime(SandboxRuntime):
         before = _snapshot_accounts(svm, mat, tracked_refs)
         t0 = time.time()
         result = mat._execute_structured(svm, action_type, parameters)
-        exec_time = time.time() - t0
+        _ = time.time() - t0
+        tx_history: list[ResearchLabTransactionModel | SimpleNamespace] = []
+        if self._db_session is not None:
+            history_result = await self._db_session.execute(
+                select(ResearchLabTransactionModel)
+                .where(ResearchLabTransactionModel.session_id == session_id)
+                .where(ResearchLabTransactionModel.execution_status == "success")
+                .order_by(ResearchLabTransactionModel.sequence_number.asc())
+            )
+            tx_history = list(history_result.scalars().all())
 
         success = False
         logs = []
@@ -700,30 +721,21 @@ class LiteSVMSandboxRuntime(SandboxRuntime):
             treasury_lamports = treasury_acc.lamports if treasury_acc else 0
             reward_acc = svm.get_account(mat.attacker.pubkey())
             reward_lamports = reward_acc.lamports if reward_acc else 0
+            tx_history = [
+                *tx_history,
+                SimpleNamespace(
+                    transaction_ref=f"tx_preview_{uuid4().hex[:8]}",
+                    sequence_number=len(tx_history) + 1,
+                    execution_status="success",
+                    instruction_type=action_type,
+                    parameters_json=parameters,
+                ),
+            ]
             protocol_state = _derive_protocol_state(
-                [],
+                tx_history,
                 credited_collateral,
                 treasury_lamports,
                 reward_lamports,
-            )
-            if action_type == "DEPOSIT_COLLATERAL":
-                protocol_state["depositPathType"] = _deposit_path_type(
-                    parameters.get("collateral_account_ref"),
-                    parameters.get("vault_account_ref"),
-                )
-            elif action_type == "WITHDRAW_AGAINST_CREDIT":
-                protocol_state["depositPathType"] = (
-                    "official" if credited_collateral <= OFFICIAL_COLLATERAL_START else "exploit"
-                )
-                protocol_state["borrowedTotal"] = int(parameters.get("amount") or 0)
-                protocol_state["availableBorrow"] = max(
-                    int(protocol_state["maxBorrow"]) - int(protocol_state["borrowedTotal"]),
-                    0,
-                )
-                protocol_state["borrowAllowed"] = protocol_state["availableBorrow"] > 0
-            protocol_state["maxDrainSatisfied"] = (
-                protocol_state.get("borrowedTotal", 0) > 0
-                and protocol_state.get("availableBorrow", 0) == 0
             )
             user_msg = "Transaction submitted."
 
@@ -735,7 +747,7 @@ class LiteSVMSandboxRuntime(SandboxRuntime):
             reward_acc = svm.get_account(mat.attacker.pubkey())
             reward_lamports = reward_acc.lamports if reward_acc else 0
             protocol_state = _derive_protocol_state(
-                [],
+                tx_history,
                 credited_collateral,
                 treasury_lamports,
                 reward_lamports,

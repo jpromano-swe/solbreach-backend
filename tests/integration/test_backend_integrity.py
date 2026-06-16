@@ -177,6 +177,7 @@ class TestExploitProvenance:
         assert body["reportUnlocked"] is True
         assert body["certificateUnlockable"] is False
         assert body["evidence"]["impactChecklist"]["maxDrainSatisfied"] is True
+        assert body["evidence"]["maxBorrowAmount"] == EXPLOIT_MAX_BORROW
 
     @pytest.mark.asyncio
     async def test_exploit_partial_borrow_does_not_verify(self, seeded_client: AsyncClient) -> None:
@@ -232,6 +233,7 @@ class TestCollateralVaultMatrix:
         assert resp.json()["data"]["execution_status"] == "success"
         assert resp.json()["data"]["protocolState"]["depositPathType"] == "official"
         assert resp.json()["data"]["protocolState"]["maxBorrow"] == OFFICIAL_MAX_BORROW
+        assert resp.json()["data"]["exploitProvenance"] == "official"
         position_resp = await seeded_client.get(
             f"/api/v1/research-labs/sessions/{sid}/accounts/position",
             headers=headers,
@@ -249,6 +251,7 @@ class TestCollateralVaultMatrix:
         assert borrow_resp.status_code == 200
         assert borrow_resp.json()["data"]["execution_status"] == "success"
         assert borrow_resp.json()["data"]["protocolState"]["availableBorrow"] == 0
+        assert borrow_resp.json()["data"]["treasuryImpactObserved"] is True
         resp_v = await seeded_client.post(
             f"/api/v1/research-labs/sessions/{sid}/verify-objective", headers=headers
         )

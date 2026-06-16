@@ -146,6 +146,8 @@ class ResearchLabTransactionModel(UUIDTimestampMixin, Base):
     logs_json: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
     account_deltas_json: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
     evidence_refs_json: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    protocol_state_json: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    user_facing_evidence_json: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
     submitted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 

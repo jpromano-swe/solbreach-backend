@@ -10,3 +10,5 @@ dist/
 build/
 
 node_modules/
+.lambda-build/
+.serverless/

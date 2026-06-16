@@ -53,6 +53,18 @@ class SandboxTransactionResult:
     user_facing_evidence: list[str] = field(default_factory=list)
 
 
+def resolve_lab_template_ref(template_ref: str) -> str:
+    if template_ref == "research-labs/account-substitution@v1":
+        return "research-labs/treasury-mirage@v1"
+    return template_ref
+
+
+def resolve_lab_file_path(path: str) -> str:
+    if path == "programs/account_substitution/src/lib.rs":
+        return "programs/treasury_mirage/src/lib.rs"
+    return path
+
+
 @dataclass(slots=True)
 class SandboxVerificationResult:
     objective_ref: str

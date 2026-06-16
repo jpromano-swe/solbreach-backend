@@ -12,6 +12,8 @@ from app.core.exceptions.domain import ConflictError, NotFoundError
 from app.modules.sandbox.domain.runtime import (
     SandboxAccountSnapshot,
     SandboxAccountSummary,
+    resolve_lab_file_path,
+    resolve_lab_template_ref,
     SandboxRuntime,
     SandboxTerminalEvent,
     SandboxTestResult,
@@ -48,7 +50,7 @@ class LocalProcessSandboxRuntime(SandboxRuntime):
             shutil.rmtree(destination)
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copytree(source, destination)
-        if template_ref == "research-labs/treasury-mirage@v1":
+        if resolve_lab_template_ref(template_ref) == "research-labs/treasury-mirage@v1":
             self._write_state(session_id, _initial_treasury_mirage_state())
 
     async def read_file(self, session_id: str, path: str) -> str:
@@ -225,14 +227,14 @@ class LocalProcessSandboxRuntime(SandboxRuntime):
         )
 
     def _template_path(self, template_ref: str) -> Path:
-        return self._template_root / template_ref
+        return self._template_root / resolve_lab_template_ref(template_ref)
 
     def _workspace_path(self, session_id: str) -> Path:
         return self._workspace_root / session_id
 
     def _safe_file_path(self, session_id: str, path: str) -> Path:
         workspace = self._workspace_path(session_id).resolve()
-        candidate = (workspace / path).resolve()
+        candidate = (workspace / resolve_lab_file_path(path)).resolve()
         if workspace not in candidate.parents and candidate != workspace:
             raise ConflictError("Invalid file path")
         return candidate

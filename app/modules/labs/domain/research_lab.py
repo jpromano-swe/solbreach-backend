@@ -125,10 +125,10 @@ RL1_ACCOUNT_SUBSTITUTION_MANIFEST = ResearchLabManifest(
         "and vault relationships, receive illegitimate credit, then withdraw real protocol "
         "treasury value."
     ),
-    allowed_files=["programs/treasury_mirage/src/lib.rs"],
-    entry_file="programs/treasury_mirage/src/lib.rs",
+    allowed_files=["programs/account_substitution/src/lib.rs"],
+    entry_file="programs/account_substitution/src/lib.rs",
     test_command="",
-    template_ref="research-labs/treasury-mirage@v1",
+    template_ref="research-labs/account-substitution@v1",
     objective_ref="RL1_ACCOUNT_SUBSTITUTION_IMPACT",
     visible_account_refs=[
         "treasury_vault",
