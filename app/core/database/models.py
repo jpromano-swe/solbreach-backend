@@ -17,6 +17,7 @@ from app.modules.progress.infrastructure.database.models import ProgressModel
 from app.modules.submissions.infrastructure.database.models import SubmissionModel
 from app.modules.users.infrastructure.database.models import UserModel
 from app.modules.vulnerabilities.infrastructure.database.models import VulnerabilityModel
+from app.modules.waitlist.infrastructure.database.models import WaitlistEntryModel
 
 __all__ = [
     "CertificationModel",
@@ -37,4 +38,5 @@ __all__ = [
     "SubmissionModel",
     "UserModel",
     "VulnerabilityModel",
+    "WaitlistEntryModel",
 ]

@@ -17,6 +17,7 @@ from app.modules.progress.presentation.api.routes import router as progress_rout
 from app.modules.submissions.presentation.api.routes import router as submissions_router
 from app.modules.users.presentation.api.routes import router as users_router
 from app.modules.vulnerabilities.presentation.api.routes import router as vulnerabilities_router
+from app.modules.waitlist.presentation.api.routes import router as waitlist_router
 import os
 from starlette.requests import Request
 
@@ -53,6 +54,7 @@ def create_app() -> FastAPI:
     app.include_router(
         certifications_router, prefix=f"{prefix}/certifications", tags=["certifications"]
     )
+    app.include_router(waitlist_router, prefix=f"{prefix}/waitlist", tags=["waitlist"])
     app.include_router(labs_router, prefix=f"{prefix}/labs", tags=["labs"])
     app.include_router(
         research_labs_router, prefix=f"{prefix}/research-labs", tags=["research-labs"]

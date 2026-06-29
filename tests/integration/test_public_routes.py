@@ -5,7 +5,13 @@ async def test_health(client: AsyncClient) -> None:
     response = await client.get("/health")
 
     assert response.status_code == 200
-    assert response.json() == {"status": "ok"}
+    assert response.json() == {
+        "status": "ok",
+        "stage": "",
+        "environment": "",
+        "deploy_version": "",
+        "deploy_commit_sha": "",
+    }
 
 
 async def test_catalog_routes_default_empty(client: AsyncClient) -> None:
