@@ -45,8 +45,9 @@ def _accepted_report_fields(verified_evidence_refs: list[str]) -> dict:
     }
 
 
-EXPLOIT_MAX_BORROW = 400_000
-OFFICIAL_MAX_BORROW = 40_000
+EXPLOIT_MAX_BORROW = 440_000
+EXPLOIT_MAX_DRAIN = 100_000
+OFFICIAL_MAX_BORROW = 120_000
 
 
 async def test_rl1_account_substitution_full_backend_flow(
@@ -125,8 +126,12 @@ async def test_rl1_account_substitution_full_backend_flow(
     assert deposit_data["accountDeltas"]
     assert deposit_data["evidenceRefs"] == [f"transaction:{deposit_data['transaction_ref']}"]
     assert deposit_data["protocolState"]["depositPathType"] == "exploit"
-    assert deposit_data["protocolState"]["creditedCollateral"] == 500_000
+    assert deposit_data["protocolState"]["officialCollateral"] == 50_000
+    assert deposit_data["protocolState"]["counterfeitCollateral"] == 500_000
+    assert deposit_data["protocolState"]["creditedCollateral"] == 550_000
+    assert deposit_data["protocolState"]["poolLiquidity"] == 100_000
     assert deposit_data["protocolState"]["maxBorrow"] == EXPLOIT_MAX_BORROW
+    assert deposit_data["protocolState"]["maxDrainAmount"] == EXPLOIT_MAX_DRAIN
 
     withdraw_response = await seeded_client.post(
         f"/api/v1/research-labs/sessions/{session_id}/transactions",
@@ -136,8 +141,10 @@ async def test_rl1_account_substitution_full_backend_flow(
     assert withdraw_response.status_code == 200
     withdraw_data = withdraw_response.json()["data"]
     assert withdraw_data["execution_status"] == "success"
-    assert withdraw_data["protocolState"]["borrowedTotal"] == EXPLOIT_MAX_BORROW
-    assert withdraw_data["protocolState"]["availableBorrow"] == 0
+    assert withdraw_data["protocolState"]["borrowedTotal"] == EXPLOIT_MAX_DRAIN
+    assert withdraw_data["protocolState"]["poolLiquidity"] == 0
+    assert withdraw_data["protocolState"]["availableBorrow"] == EXPLOIT_MAX_BORROW - EXPLOIT_MAX_DRAIN
+    assert withdraw_data["protocolState"]["maxDrainAmount"] == 0
 
     verify_response = await seeded_client.post(
         f"/api/v1/research-labs/sessions/{session_id}/verify-objective",
@@ -154,7 +161,7 @@ async def test_rl1_account_substitution_full_backend_flow(
     assert verified["evidence"]["impactChecklist"]["counterfeitDepositObserved"] is True
     assert verified["evidence"]["impactChecklist"]["realProtocolTreasuryValueDecreased"] is True
     assert verified["evidence"]["impactChecklist"]["maxDrainSatisfied"] is True
-    assert verified["evidence"]["borrowedAmount"] == EXPLOIT_MAX_BORROW
+    assert verified["evidence"]["borrowedAmount"] == EXPLOIT_MAX_DRAIN
     assert verified["evidence"]["maxBorrowAmount"] == EXPLOIT_MAX_BORROW
 
     draft_report_response = await seeded_client.get(

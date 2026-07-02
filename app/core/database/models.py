@@ -1,5 +1,11 @@
 from app.modules.analytics.infrastructure.database.models import AnalyticsEventModel
 from app.modules.auth.infrastructure.database.models import WalletAuthNonceModel
+from app.modules.beta_access.infrastructure.database.models import (
+    BetaAccessCodeModel,
+    BetaAccessCodeRedemptionModel,
+    BetaAccessGrantModel,
+    BetaAccessRequestModel,
+)
 from app.modules.certifications.infrastructure.database.models import CertificationModel
 from app.modules.labs.infrastructure.database.models import (
     LabModel,
@@ -23,6 +29,10 @@ __all__ = [
     "CertificationModel",
     "AnalyticsEventModel",
     "WalletAuthNonceModel",
+    "BetaAccessCodeModel",
+    "BetaAccessCodeRedemptionModel",
+    "BetaAccessGrantModel",
+    "BetaAccessRequestModel",
     "LabModel",
     "ResearchLabCompletionModel",
     "ResearchLabExploitVerificationModel",

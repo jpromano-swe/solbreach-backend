@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Any, Protocol
 
 
 @dataclass(slots=True)
@@ -50,7 +50,7 @@ class SandboxTransactionResult:
     logs: list[str] = field(default_factory=list)
     account_deltas: list[dict] = field(default_factory=list)
     protocol_state: dict = field(default_factory=dict)
-    user_facing_evidence: list[str] = field(default_factory=list)
+    user_facing_evidence: list[Any] = field(default_factory=list)
 
 
 def resolve_lab_template_ref(template_ref: str) -> str:
@@ -72,7 +72,7 @@ class SandboxVerificationResult:
     evidence: dict
     verified_evidence_refs: list[str] = field(default_factory=list)
     failure_reason: str | None = None
-    user_facing_evidence: list[str] = field(default_factory=list)
+    user_facing_evidence: list[Any] = field(default_factory=list)
 
 
 class SandboxRuntime(Protocol):

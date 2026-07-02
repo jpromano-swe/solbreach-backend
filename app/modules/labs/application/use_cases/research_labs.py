@@ -963,7 +963,7 @@ def _account_snapshot_payload(account: SandboxAccountSnapshot) -> dict:
 def _transaction_payload(
     transaction: ResearchLabTransactionModel,
     *,
-    user_facing_evidence: list[str] | None = None,
+    user_facing_evidence: list | None = None,
     protocol_state: dict | None = None,
 ) -> dict:
     effective_protocol_state = protocol_state or transaction.protocol_state_json or {}
@@ -985,6 +985,7 @@ def _transaction_payload(
         "evidence_refs": transaction.evidence_refs_json,
         "evidenceRefs": transaction.evidence_refs_json,
         "protocolState": effective_protocol_state,
+        "protocol_state": effective_protocol_state,
         "exploitProvenance": effective_protocol_state.get("depositPathType"),
         "creditedCollateral": effective_protocol_state.get("creditedCollateral"),
         "maxBorrow": effective_protocol_state.get("maxBorrow"),
@@ -1105,17 +1106,24 @@ def _validate_report(lab_id: str, fields: dict) -> dict:
 def _initial_protocol_state() -> dict:
     return {
         "depositPathType": "none",
-        "creditedCollateral": 0,
-        "treasuryLamports": 0,
-        "initialTreasuryLamports": 0,
+        "officialCollateral": 50_000,
+        "counterfeitCollateral": 0,
+        "creditedCollateral": 50_000,
+        "effectiveCreditedCollateral": 50_000,
+        "poolLiquidity": 100_000,
+        "treasuryLamports": 100_000,
+        "initialTreasuryLamports": 100_000,
         "rewardLamports": 0,
         "successfulDeposits": [],
         "successfulWithdrawals": [],
-        "maxBorrow": 0,
-        "availableBorrow": 0,
+        "maxBorrow": 40_000,
+        "availableBorrow": 40_000,
+        "maxDrainAmount": 40_000,
         "borrowedTotal": 0,
-        "borrowAllowed": False,
+        "borrowAllowed": True,
         "ltvBps": 8000,
+        "hasOfficialDeposit": False,
+        "hasExploitDeposit": False,
         "maxDrainSatisfied": False,
     }
 

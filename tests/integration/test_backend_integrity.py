@@ -52,8 +52,13 @@ def _accepted_report_fields(verified_evidence_refs: list[str]) -> dict:
     }
 
 
-EXPLOIT_MAX_BORROW = 400_000
-OFFICIAL_MAX_BORROW = 40_000
+INITIAL_POOL_LIQUIDITY = 100_000
+EXPLOIT_MAX_BORROW = 440_000
+EXPLOIT_MAX_DRAIN = 100_000
+OFFICIAL_DEPOSIT_AMOUNT = 100_000
+OFFICIAL_MAX_BORROW = 120_000
+MIXED_MAX_BORROW = 520_000
+MIXED_MAX_DRAIN = 200_000
 OFFICIAL_COLLATERAL_START = 50_000
 
 
@@ -140,7 +145,7 @@ class TestExploitProvenance:
             json={"action_type": "WITHDRAW_AGAINST_CREDIT", "parameters": {"amount": 50000}},
         )
         assert tx_resp.status_code == 200
-        assert tx_resp.json()["data"]["execution_status"] == "failure"
+        assert tx_resp.json()["data"]["execution_status"] == "success"
         verify_resp = await seeded_client.post(
             f"/api/v1/research-labs/sessions/{sid}/verify-objective", headers=headers
         )
@@ -178,6 +183,64 @@ class TestExploitProvenance:
         assert body["certificateUnlockable"] is False
         assert body["evidence"]["impactChecklist"]["maxDrainSatisfied"] is True
         assert body["evidence"]["maxBorrowAmount"] == EXPLOIT_MAX_BORROW
+        assert body["evidence"]["borrowedAmount"] == EXPLOIT_MAX_DRAIN
+
+    @pytest.mark.asyncio
+    async def test_failed_deposit_does_not_block_later_impact_verification(
+        self, seeded_client: AsyncClient
+    ) -> None:
+        token = await register_user(seeded_client, "probe3-recover@x.com")
+        sid = await create_session(seeded_client, token)
+        headers = {"Authorization": f"Bearer {token}"}
+        invalid = await seeded_client.post(
+            f"/api/v1/research-labs/sessions/{sid}/transactions",
+            headers=headers,
+            json={
+                "action_type": "DEPOSIT_COLLATERAL",
+                "parameters": {
+                    "amount": OFFICIAL_DEPOSIT_AMOUNT,
+                    "collateral_account_ref": "attacker_collateral_account",
+                    "vault_account_ref": "official_vault_account",
+                },
+            },
+        )
+        assert invalid.status_code == 200
+        assert invalid.json()["data"]["execution_status"] == "failure"
+        assert invalid.json()["data"]["protocolState"]["creditedCollateral"] == OFFICIAL_COLLATERAL_START
+        assert invalid.json()["data"]["protocolState"]["poolLiquidity"] == INITIAL_POOL_LIQUIDITY
+
+        deposit = await seeded_client.post(
+            f"/api/v1/research-labs/sessions/{sid}/transactions",
+            headers=headers,
+            json={
+                "action_type": "DEPOSIT_COLLATERAL",
+                "parameters": {
+                    "amount": OFFICIAL_DEPOSIT_AMOUNT,
+                    "collateral_account_ref": "attacker_collateral_account",
+                    "vault_account_ref": "counterfeit_vault_account",
+                },
+            },
+        )
+        assert deposit.status_code == 200
+        assert deposit.json()["data"]["execution_status"] == "success"
+        assert deposit.json()["data"]["protocolState"]["depositPathType"] == "exploit"
+
+        withdraw = await seeded_client.post(
+            f"/api/v1/research-labs/sessions/{sid}/transactions",
+            headers=headers,
+            json={"action_type": "WITHDRAW_AGAINST_CREDIT", "parameters": {"amount": EXPLOIT_MAX_BORROW}},
+        )
+        assert withdraw.status_code == 200
+        assert withdraw.json()["data"]["execution_status"] == "success"
+
+        resp = await seeded_client.post(
+            f"/api/v1/research-labs/sessions/{sid}/verify-objective", headers=headers
+        )
+        body = resp.json()["data"]
+        assert body["passed"] is True
+        assert body["impactVerified"] is True
+        assert body["evidence"]["impactChecklist"]["exploitPathOnly"] is True
+        assert body["evidence"]["borrowedAmount"] == EXPLOIT_MAX_DRAIN
 
     @pytest.mark.asyncio
     async def test_exploit_partial_borrow_does_not_verify(self, seeded_client: AsyncClient) -> None:
@@ -206,7 +269,7 @@ class TestExploitProvenance:
         )
         body = resp.json()["data"]
         assert body["passed"] is False
-        assert "max borrow amount" in body["failureReason"]
+        assert "max executable amount" in body["failureReason"]
 
 
 class TestCollateralVaultMatrix:
@@ -223,7 +286,7 @@ class TestCollateralVaultMatrix:
             json={
                 "action_type": "DEPOSIT_COLLATERAL",
                 "parameters": {
-                    "amount": 50000,
+                    "amount": OFFICIAL_DEPOSIT_AMOUNT,
                     "collateral_account_ref": "official_collateral_account",
                     "vault_account_ref": "official_vault_account",
                 },
@@ -232,7 +295,10 @@ class TestCollateralVaultMatrix:
         assert resp.status_code == 200
         assert resp.json()["data"]["execution_status"] == "success"
         assert resp.json()["data"]["protocolState"]["depositPathType"] == "official"
+        assert resp.json()["data"]["protocolState"]["poolLiquidity"] == 200_000
+        assert resp.json()["data"]["protocolState"]["officialCollateral"] == 150_000
         assert resp.json()["data"]["protocolState"]["maxBorrow"] == OFFICIAL_MAX_BORROW
+        assert resp.json()["data"]["protocolState"]["availableBorrow"] == OFFICIAL_MAX_BORROW
         assert resp.json()["data"]["exploitProvenance"] == "official"
         position_resp = await seeded_client.get(
             f"/api/v1/research-labs/sessions/{sid}/accounts/position",
@@ -240,7 +306,9 @@ class TestCollateralVaultMatrix:
         )
         assert position_resp.status_code == 200
         position_data = position_resp.json()["data"]["account"]["data"]
-        assert position_data["creditedCollateral"] == OFFICIAL_COLLATERAL_START
+        assert position_data["poolLiquidity"] == 200_000
+        assert position_data["officialCollateral"] == 150_000
+        assert position_data["creditedCollateral"] == 150_000
         assert position_data["availableBorrow"] == OFFICIAL_MAX_BORROW
         assert position_data["depositPathType"] == "official"
         borrow_resp = await seeded_client.post(
@@ -251,6 +319,7 @@ class TestCollateralVaultMatrix:
         assert borrow_resp.status_code == 200
         assert borrow_resp.json()["data"]["execution_status"] == "success"
         assert borrow_resp.json()["data"]["protocolState"]["availableBorrow"] == 0
+        assert borrow_resp.json()["data"]["protocolState"]["poolLiquidity"] == 80_000
         assert borrow_resp.json()["data"]["treasuryImpactObserved"] is True
         resp_v = await seeded_client.post(
             f"/api/v1/research-labs/sessions/{sid}/verify-objective", headers=headers
@@ -277,7 +346,35 @@ class TestCollateralVaultMatrix:
             },
         )
         assert resp.status_code == 200
-        assert resp.json()["data"]["execution_status"] == "failure"
+        body = resp.json()
+        assert body["success"] is True
+        data = body["data"]
+        assert data["execution_status"] == "failure"
+        assert data["executionStatus"] == "failure"
+        assert "collateral source mint does not match" in " ".join(data["logs"])
+        assert data["protocolState"]["creditedCollateral"] == OFFICIAL_COLLATERAL_START
+        assert data["protocolState"]["poolLiquidity"] == INITIAL_POOL_LIQUIDITY
+        assert data["protocolState"]["maxBorrow"] == 40_000
+        assert data["protocolState"]["lastRejectedReason"] == "COLLATERAL_VAULT_MISMATCH"
+        assert data["userFacingEvidence"][0]["type"] == "rejected_transaction"
+
+        retry = await seeded_client.post(
+            f"/api/v1/research-labs/sessions/{sid}/transactions",
+            headers=headers,
+            json={
+                "action_type": "DEPOSIT_COLLATERAL",
+                "parameters": {
+                    "amount": OFFICIAL_DEPOSIT_AMOUNT,
+                    "collateral_account_ref": "attacker_collateral_account",
+                    "vault_account_ref": "counterfeit_vault_account",
+                },
+            },
+        )
+        assert retry.status_code == 200
+        assert retry.json()["data"]["execution_status"] == "success"
+        assert retry.json()["data"]["protocolState"]["depositPathType"] == "exploit"
+        assert retry.json()["data"]["protocolState"]["maxBorrow"] == EXPLOIT_MAX_BORROW
+        assert retry.json()["data"]["protocolState"]["poolLiquidity"] == INITIAL_POOL_LIQUIDITY
 
     @pytest.mark.asyncio
     async def test_official_collateral_and_external_vault_fails(
@@ -299,7 +396,106 @@ class TestCollateralVaultMatrix:
             },
         )
         assert resp.status_code == 200
-        assert resp.json()["data"]["execution_status"] == "failure"
+        body = resp.json()
+        assert body["success"] is True
+        data = body["data"]
+        assert data["execution_status"] == "failure"
+        assert data["executionStatus"] == "failure"
+        assert "canonical USDC deposits must target the official protocol vault" in " ".join(
+            data["logs"]
+        )
+        assert data["protocolState"]["creditedCollateral"] == OFFICIAL_COLLATERAL_START
+        assert data["protocol_state"]["creditedCollateral"] == OFFICIAL_COLLATERAL_START
+        assert data["protocolState"]["poolLiquidity"] == INITIAL_POOL_LIQUIDITY
+        assert data["protocolState"]["maxBorrow"] == 40_000
+        assert data["protocolState"]["lastRejectedReason"] == "CANONICAL_USDC_ATTACK_VAULT"
+        assert data["userFacingEvidence"][0]["type"] == "rejected_transaction"
+
+        retry = await seeded_client.post(
+            f"/api/v1/research-labs/sessions/{sid}/transactions",
+            headers=headers,
+            json={
+                "action_type": "DEPOSIT_COLLATERAL",
+                "parameters": {
+                    "amount": OFFICIAL_DEPOSIT_AMOUNT,
+                    "collateral_account_ref": "official_collateral_account",
+                    "vault_account_ref": "official_vault_account",
+                },
+            },
+        )
+        assert retry.status_code == 200
+        assert retry.json()["data"]["execution_status"] == "success"
+        assert retry.json()["data"]["protocolState"]["depositPathType"] == "official"
+        assert retry.json()["data"]["protocolState"]["maxBorrow"] == OFFICIAL_MAX_BORROW
+        assert retry.json()["data"]["protocolState"]["poolLiquidity"] == 200_000
+
+    @pytest.mark.asyncio
+    async def test_official_deposit_pool_state_survives_later_exploit_deposit(
+        self, seeded_client: AsyncClient
+    ) -> None:
+        token = await register_user(seeded_client, "matrix4@x.com")
+        sid = await create_session(seeded_client, token)
+        headers = {"Authorization": f"Bearer {token}"}
+
+        official = await seeded_client.post(
+            f"/api/v1/research-labs/sessions/{sid}/transactions",
+            headers=headers,
+            json={
+                "action_type": "DEPOSIT_COLLATERAL",
+                "parameters": {
+                    "amount": OFFICIAL_DEPOSIT_AMOUNT,
+                    "collateral_account_ref": "official_collateral_account",
+                    "vault_account_ref": "official_vault_account",
+                },
+            },
+        )
+        assert official.status_code == 200
+        official_state = official.json()["data"]["protocolState"]
+        assert official_state["poolLiquidity"] == 200_000
+        assert official_state["officialCollateral"] == 150_000
+        assert official_state["maxBorrow"] == OFFICIAL_MAX_BORROW
+
+        exploit = await seeded_client.post(
+            f"/api/v1/research-labs/sessions/{sid}/transactions",
+            headers=headers,
+            json={
+                "action_type": "DEPOSIT_COLLATERAL",
+                "parameters": {
+                    "amount": 500_000,
+                    "collateral_account_ref": "attacker_collateral_account",
+                    "vault_account_ref": "counterfeit_vault_account",
+                },
+            },
+        )
+        assert exploit.status_code == 200
+        exploit_state = exploit.json()["data"]["protocolState"]
+        assert exploit_state["depositPathType"] == "mixed"
+        assert exploit_state["poolLiquidity"] == 200_000
+        assert exploit_state["officialCollateral"] == 150_000
+        assert exploit_state["counterfeitCollateral"] == 500_000
+        assert exploit_state["hasOfficialDeposit"] is True
+        assert exploit_state["hasExploitDeposit"] is True
+        assert exploit_state["maxBorrow"] == MIXED_MAX_BORROW
+        assert exploit_state["availableBorrow"] == MIXED_MAX_BORROW
+        assert exploit_state["maxDrainAmount"] == MIXED_MAX_DRAIN
+
+        withdraw = await seeded_client.post(
+            f"/api/v1/research-labs/sessions/{sid}/transactions",
+            headers=headers,
+            json={"action_type": "WITHDRAW_AGAINST_CREDIT", "parameters": {"amount": MIXED_MAX_BORROW}},
+        )
+        assert withdraw.status_code == 200
+        withdraw_state = withdraw.json()["data"]["protocolState"]
+        assert withdraw_state["borrowedTotal"] == MIXED_MAX_DRAIN
+        assert withdraw_state["poolLiquidity"] == 0
+        assert withdraw_state["maxDrainAmount"] == 0
+        assert withdraw_state["maxDrainSatisfied"] is True
+
+        verify = await seeded_client.post(
+            f"/api/v1/research-labs/sessions/{sid}/verify-objective", headers=headers
+        )
+        assert verify.status_code == 200
+        assert verify.json()["data"]["passed"] is True
 
 
 class TestCompletionGates:

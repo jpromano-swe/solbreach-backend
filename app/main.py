@@ -7,6 +7,7 @@ from app.core.logging.setup import configure_logging
 from app.core.middleware.request_id import RequestIDMiddleware
 from app.modules.analytics.presentation.api.routes import router as analytics_router
 from app.modules.auth.presentation.api.routes import router as auth_router
+from app.modules.beta_access.presentation.api.routes import router as beta_access_router
 from app.modules.certifications.presentation.api.routes import router as certifications_router
 from app.modules.labs.presentation.api.research_lab_routes import (
     router as research_labs_router,
@@ -43,6 +44,7 @@ def create_app() -> FastAPI:
 
     prefix = settings.api_v1_prefix
     app.include_router(auth_router, prefix=f"{prefix}/auth", tags=["auth"])
+    app.include_router(beta_access_router, prefix=f"{prefix}/beta-access", tags=["beta-access"])
     app.include_router(analytics_router, prefix=f"{prefix}/analytics", tags=["analytics"])
     app.include_router(users_router, prefix=f"{prefix}/users", tags=["users"])
     app.include_router(

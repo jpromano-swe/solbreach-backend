@@ -36,11 +36,25 @@ from app.modules.labs.infrastructure.database.models import ResearchLabTransacti
 TOKEN_PROGRAM_ID = Pubkey.from_string("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA")
 SYS_PROGRAM_ID = Pubkey.from_string("11111111111111111111111111111111")
 PROGRAM_ID = Pubkey.from_string("Mirage1111111111111111111111111111111111111")
-INITIAL_TREASURY_LAMPORTS = 5_000_000_000
-INITIAL_REWARD_LAMPORTS = 1_000_000_000
+INITIAL_TREASURY_LAMPORTS = 100_000
+INITIAL_REWARD_LAMPORTS = 0
 OFFICIAL_COLLATERAL_START = 50_000
 COUNTERFEIT_COLLATERAL_START = 500_000
 LTV_BPS = 8_000
+OFFICIAL_COLLATERAL_REFS = {"official_collateral", "official_collateral_account"}
+COUNTERFEIT_COLLATERAL_REFS = {
+    "attacker_collateral",
+    "attacker_collateral_account",
+    "candidate_collateral",
+    "candidate_collateral_account",
+}
+OFFICIAL_VAULT_REFS = {"official_vault", "official_vault_account"}
+COUNTERFEIT_VAULT_REFS = {
+    "counterfeit_vault",
+    "counterfeit_vault_account",
+    "external_vault",
+    "external_vault_account",
+}
 
 LAB_ACCOUNT_MAP = {
     "treasury_vault": {"label": "Protocol Treasury", "pda": True},
@@ -96,47 +110,68 @@ def _set_position_credit(svm: LiteSVM, position_pda: Pubkey, credited_collateral
     )
 
 
+def _set_lamports(svm: LiteSVM, pubkey: Pubkey, lamports: int) -> None:
+    account = svm.get_account(pubkey)
+    if account is None:
+        return
+    svm.set_account(
+        pubkey,
+        Account(
+            lamports=max(int(lamports), 0),
+            data=account.data,
+            owner=account.owner,
+            executable=account.executable,
+            rent_epoch=account.rent_epoch,
+        ),
+    )
+
+
 def _token_amount(data: bytes | bytearray) -> int:
     if len(data) < 72:
         return 0
     return int.from_bytes(data[64:72], "little")
 
 
+def _positive_amount(params: dict, default: int) -> int:
+    amount = int(params.get("amount") or default)
+    return max(amount, 0)
+
+
 def _borrow_quote(credited_collateral: int, treasury_lamports: int, borrowed_total: int) -> dict[str, int | bool]:
     gross_max_borrow = (credited_collateral * LTV_BPS) // 10_000
     remaining_credit = max(gross_max_borrow - borrowed_total, 0)
-    max_borrow = min(remaining_credit, treasury_lamports)
     return {
         "ltvBps": LTV_BPS,
         "grossMaxBorrow": gross_max_borrow,
         "borrowedTotal": borrowed_total,
-        "availableBorrow": max_borrow,
-        "borrowAllowed": max_borrow > 0,
+        "availableBorrow": remaining_credit,
+        "maxDrainAmount": min(remaining_credit, treasury_lamports),
+        "borrowAllowed": remaining_credit > 0 and treasury_lamports > 0,
     }
 
 
 def _deposit_path_type(collateral_ref: str | None, vault_ref: str | None) -> str:
-    if collateral_ref in {
-        "official_collateral",
-        "official_collateral_account",
-    } and vault_ref in {
-        "official_vault",
-        "official_vault_account",
-    }:
+    if collateral_ref in OFFICIAL_COLLATERAL_REFS and vault_ref in OFFICIAL_VAULT_REFS:
         return "official"
-    if collateral_ref in {
-        "attacker_collateral",
-        "attacker_collateral_account",
-        "candidate_collateral",
-        "candidate_collateral_account",
-    } and vault_ref in {
-        "counterfeit_vault",
-        "counterfeit_vault_account",
-        "external_vault",
-        "external_vault_account",
-    }:
+    if collateral_ref in COUNTERFEIT_COLLATERAL_REFS and vault_ref in COUNTERFEIT_VAULT_REFS:
         return "exploit"
     return "mixed"
+
+
+def _deposit_rejection(collateral_ref: str | None, vault_ref: str | None) -> dict | None:
+    if collateral_ref in OFFICIAL_COLLATERAL_REFS and vault_ref in COUNTERFEIT_VAULT_REFS:
+        return {
+            "reason": "CANONICAL_USDC_ATTACK_VAULT",
+            "log": "Transaction rejected: canonical USDC deposits must target the official protocol vault.",
+            "summary": "SVM rejected the deposit because canonical USDC was routed to an attacker-controlled vault.",
+        }
+    if collateral_ref in COUNTERFEIT_COLLATERAL_REFS and vault_ref in OFFICIAL_VAULT_REFS:
+        return {
+            "reason": "COLLATERAL_VAULT_MISMATCH",
+            "log": "Transaction rejected: collateral source mint does not match the official USDC vault.",
+            "summary": "SVM rejected the deposit because the collateral source did not match the target vault.",
+        }
+    return None
 
 
 def _derive_protocol_state(
@@ -147,27 +182,47 @@ def _derive_protocol_state(
 ) -> dict:
     successful_deposits: list[dict] = []
     successful_withdrawals: list[dict] = []
+    official_collateral = OFFICIAL_COLLATERAL_START
+    counterfeit_collateral = 0
+    pool_liquidity = INITIAL_TREASURY_LAMPORTS
+    borrowed_total = 0
     for tx_model in tx_models:
         if tx_model.execution_status != "success":
             continue
         if tx_model.instruction_type == "DEPOSIT_COLLATERAL":
             params = tx_model.parameters_json or {}
+            path_type = _deposit_path_type(
+                params.get("collateral_account_ref"),
+                params.get("vault_account_ref"),
+            )
+            amount = (
+                COUNTERFEIT_COLLATERAL_START
+                if path_type == "exploit"
+                else _positive_amount(params, 0)
+            )
+            if path_type == "official":
+                official_collateral += amount
+                pool_liquidity += amount
+            elif path_type == "exploit":
+                counterfeit_collateral += amount
             successful_deposits.append(
                 {
                     "transactionRef": tx_model.transaction_ref,
                     "sequenceNumber": tx_model.sequence_number,
-                    "pathType": _deposit_path_type(
-                        params.get("collateral_account_ref"),
-                        params.get("vault_account_ref"),
-                    ),
+                    "pathType": path_type,
+                    "amount": amount,
                 }
             )
         elif tx_model.instruction_type == "WITHDRAW_AGAINST_CREDIT":
+            params = tx_model.parameters_json or {}
+            amount = int(params.get("executed_amount") or params.get("amount") or 0)
+            borrowed_total += amount
+            pool_liquidity = max(pool_liquidity - amount, 0)
             successful_withdrawals.append(
                 {
                     "transactionRef": tx_model.transaction_ref,
                     "sequenceNumber": tx_model.sequence_number,
-                    "amount": int((tx_model.parameters_json or {}).get("amount") or 0),
+                    "amount": amount,
                 }
             )
 
@@ -180,28 +235,33 @@ def _derive_protocol_state(
     elif deposit_types:
         deposit_path_type = "mixed"
 
-    borrowed_total = max(reward_lamports - INITIAL_REWARD_LAMPORTS, 0)
-    if successful_withdrawals:
-        borrowed_total = sum(item["amount"] for item in successful_withdrawals)
-    quoted_collateral = credited_collateral + borrowed_total
-    quoted_treasury = treasury_lamports + borrowed_total
-    borrow_quote = _borrow_quote(quoted_collateral, quoted_treasury, borrowed_total)
+    effective_collateral = official_collateral + counterfeit_collateral
+    borrow_quote = _borrow_quote(effective_collateral, pool_liquidity, borrowed_total)
+    has_official_deposit = "official" in deposit_types
+    has_exploit_deposit = "exploit" in deposit_types
 
     return {
         "depositPathType": deposit_path_type,
-        "creditedCollateral": credited_collateral,
-        "quotedCollateral": quoted_collateral,
-        "treasuryLamports": treasury_lamports,
+        "officialCollateral": official_collateral,
+        "counterfeitCollateral": counterfeit_collateral,
+        "creditedCollateral": effective_collateral,
+        "effectiveCreditedCollateral": effective_collateral,
+        "poolLiquidity": pool_liquidity,
+        "quotedCollateral": effective_collateral,
+        "treasuryLamports": pool_liquidity,
         "initialTreasuryLamports": INITIAL_TREASURY_LAMPORTS,
-        "rewardLamports": reward_lamports,
+        "rewardLamports": INITIAL_REWARD_LAMPORTS + borrowed_total,
         "successfulDeposits": successful_deposits,
         "successfulWithdrawals": successful_withdrawals,
         "maxBorrow": borrow_quote["grossMaxBorrow"],
         "availableBorrow": borrow_quote["availableBorrow"],
+        "maxDrainAmount": borrow_quote["maxDrainAmount"],
         "borrowedTotal": borrow_quote["borrowedTotal"],
         "borrowAllowed": borrow_quote["borrowAllowed"],
         "ltvBps": borrow_quote["ltvBps"],
-        "maxDrainSatisfied": borrow_quote["availableBorrow"] == 0 and borrowed_total > 0,
+        "hasOfficialDeposit": has_official_deposit,
+        "hasExploitDeposit": has_exploit_deposit,
+        "maxDrainSatisfied": pool_liquidity == 0 and borrowed_total > 0,
     }
 
 
@@ -372,7 +432,7 @@ class SessionMaterializer:
             self.official_vault_pk,
             Account(
                 lamports=1_000_000,
-                data=_spl_token_data(self.official_mint, self.treasury_pda, 1_000_000),
+                data=_spl_token_data(self.official_mint, self.treasury_pda, INITIAL_TREASURY_LAMPORTS),
                 owner=TOKEN_PROGRAM_ID,
                 executable=False,
                 rent_epoch=0,
@@ -391,6 +451,7 @@ class SessionMaterializer:
         bh = svm.latest_blockhash()
         tx = VersionedTransaction(Message.new_with_blockhash([init_ix], self.payer.pubkey(), bh), [self.payer, self.attacker])
         svm.send_transaction(tx)
+        _set_position_credit(svm, self.position_pda, OFFICIAL_COLLATERAL_START)
 
         t_seed = time.time()
         self.metrics["seed_state_ms"] = (t_seed - t0) * 1000
@@ -416,26 +477,28 @@ class SessionMaterializer:
         ix = None
         position_credit_override: int | None = None
         if action_type == "DEPOSIT_COLLATERAL":
-            amount = int(params.get("amount") or 0)
+            amount = _positive_amount(params, 0)
             collat_ref = params.get("collateral_account_ref", "attacker_collateral")
             vault_ref = params.get("vault_account_ref", "counterfeit_vault")
 
-            if collat_ref in ("attacker_collateral", "attacker_collateral_account", "candidate_collateral", "candidate_collateral_account"):
+            if collat_ref in COUNTERFEIT_COLLATERAL_REFS:
                 source = self.attacker_collateral_pk
-                source_acc = svm.get_account(source)
                 current_credit = _position_credit(svm.get_account(self.position_pda).data)
-                exploit_credit = _token_amount(source_acc.data) if source_acc else 0
+                exploit_credit = COUNTERFEIT_COLLATERAL_START
+                params["executed_amount"] = exploit_credit
                 position_credit_override = current_credit + exploit_credit
-            elif collat_ref in ("official_collateral", "official_collateral_account"):
+            elif collat_ref in OFFICIAL_COLLATERAL_REFS:
+                if amount <= 0:
+                    return None
                 source = self.official_collateral_pk
                 current_credit = _position_credit(svm.get_account(self.position_pda).data)
-                position_credit_override = current_credit + min(amount, OFFICIAL_COLLATERAL_START)
+                position_credit_override = current_credit + amount
             else:
                 return None
 
-            if vault_ref in ("counterfeit_vault", "counterfeit_vault_account", "external_vault", "external_vault_account"):
+            if vault_ref in COUNTERFEIT_VAULT_REFS:
                 dest = self.counterfeit_vault_pk
-            elif vault_ref in ("official_vault", "official_vault_account"):
+            elif vault_ref in OFFICIAL_VAULT_REFS:
                 dest = self.official_vault_pk
             else:
                 return None
@@ -459,9 +522,11 @@ class SessionMaterializer:
             reward_acc = svm.get_account(self.attacker.pubkey())
             borrowed_total = max((reward_acc.lamports if reward_acc else 0) - INITIAL_REWARD_LAMPORTS, 0)
             quote = _borrow_quote(credited_collateral, treasury_lamports, borrowed_total)
-            amount = int(params.get("amount", quote["availableBorrow"]))
-            if amount <= 0 or amount > int(quote["availableBorrow"]):
+            requested_amount = int(params.get("amount") or quote["maxDrainAmount"])
+            amount = min(requested_amount, int(quote["maxDrainAmount"]))
+            if amount <= 0:
                 return None
+            params["executed_amount"] = amount
             ix = Instruction(
                 PROGRAM_ID,
                 _discriminator("global", "withdraw_against_credit") + amount.to_bytes(8, "little"),
@@ -480,6 +545,10 @@ class SessionMaterializer:
             result = svm.send_transaction(tx)
             if not isinstance(result, FailedTransactionMetadata) and position_credit_override is not None:
                 _set_position_credit(svm, self.position_pda, position_credit_override)
+                if _deposit_path_type(collat_ref, vault_ref) == "official":
+                    treasury_acc = svm.get_account(self.treasury_pda)
+                    if treasury_acc is not None:
+                        _set_lamports(svm, self.treasury_pda, treasury_acc.lamports + amount)
             return result
         return None
 
@@ -681,9 +750,6 @@ class LiteSVMSandboxRuntime(SandboxRuntime):
             "official_vault_account",
         ]
         before = _snapshot_accounts(svm, mat, tracked_refs)
-        t0 = time.time()
-        result = mat._execute_structured(svm, action_type, parameters)
-        _ = time.time() - t0
         tx_history: list[ResearchLabTransactionModel | SimpleNamespace] = []
         if self._db_session is not None:
             history_result = await self._db_session.execute(
@@ -698,18 +764,65 @@ class LiteSVMSandboxRuntime(SandboxRuntime):
         logs = []
         account_deltas: list[dict] = []
         protocol_state: dict = {}
-        user_msg = "Transaction failed."
-        if result is None:
+        user_facing_evidence: list = [
+            {"type": "transaction_result", "summary": "Transaction failed."}
+        ]
+        rejection = None
+        result = None
+        if action_type == "DEPOSIT_COLLATERAL":
+            rejection = _deposit_rejection(
+                parameters.get("collateral_account_ref", "attacker_collateral"),
+                parameters.get("vault_account_ref", "counterfeit_vault"),
+            )
+
+        if rejection is not None:
+            logs = ["Transaction submitted to SVM.", rejection["log"]]
+            user_facing_evidence = [
+                {"type": "rejected_transaction", "summary": rejection["summary"]}
+            ]
+            position_acc = svm.get_account(mat.position_pda)
+            credited_collateral = _position_credit(position_acc.data) if position_acc else 0
+            treasury_acc = svm.get_account(mat.treasury_pda)
+            treasury_lamports = treasury_acc.lamports if treasury_acc else 0
+            reward_acc = svm.get_account(mat.attacker.pubkey())
+            reward_lamports = reward_acc.lamports if reward_acc else 0
+            protocol_state = _derive_protocol_state(
+                tx_history,
+                credited_collateral,
+                treasury_lamports,
+                reward_lamports,
+            )
+            protocol_state["lastRejectedReason"] = rejection["reason"]
+        else:
+            t0 = time.time()
+            result = mat._execute_structured(svm, action_type, parameters)
+            _ = time.time() - t0
+
+        if rejection is not None:
+            pass
+        elif result is None:
             if action_type == "WITHDRAW_AGAINST_CREDIT":
-                user_msg = "Borrow request exceeds the currently available borrow limit."
+                user_facing_evidence = [
+                    {
+                        "type": "rejected_transaction",
+                        "summary": "Borrow request exceeds the currently available borrow limit.",
+                    }
+                ]
             else:
-                user_msg = "Unknown or invalid action parameters."
+                user_facing_evidence = [
+                    {
+                        "type": "rejected_transaction",
+                        "summary": "Unknown or invalid action parameters.",
+                    }
+                ]
         elif isinstance(result, FailedTransactionMetadata):
             err = result.err()
             meta = result.meta()
             logs = list(meta.logs())
             err_str = str(err) if err else "unknown error"
-            user_msg = f"Transaction failed: {err_str}"
+            user_facing_evidence = [
+                {"type": "rejected_transaction", "summary": f"Transaction failed: {err_str}"}
+            ]
         else:
             success = True
             logs = list(result.logs())
@@ -737,7 +850,9 @@ class LiteSVMSandboxRuntime(SandboxRuntime):
                 treasury_lamports,
                 reward_lamports,
             )
-            user_msg = "Transaction submitted."
+            user_facing_evidence = [
+                {"type": "transaction_result", "summary": "Transaction submitted."}
+            ]
 
         if not protocol_state:
             position_acc = svm.get_account(mat.position_pda)
@@ -760,7 +875,7 @@ class LiteSVMSandboxRuntime(SandboxRuntime):
             logs=logs,
             account_deltas=account_deltas,
             protocol_state=protocol_state,
-            user_facing_evidence=[user_msg],
+            user_facing_evidence=user_facing_evidence,
         )
 
     async def get_transaction_logs(self, session_id: str, transaction_ref: str) -> list[str]:
@@ -824,8 +939,11 @@ class LiteSVMSandboxRuntime(SandboxRuntime):
         counterfeit_deposit_observed = successful_invalid_deposit is not None
         unapproved_collateral_source_used = counterfeit_deposit_observed
         non_canonical_vault_destination_used = counterfeit_deposit_observed
-        position_credit_increased = counterfeit_deposit_observed and credited > 0
-        treasury_drained = treasury_lamports < INITIAL_TREASURY_LAMPORTS
+        position_credit_increased = (
+            counterfeit_deposit_observed
+            and int(protocol_state.get("counterfeitCollateral", 0) or 0) > 0
+        )
+        treasury_drained = int(protocol_state.get("poolLiquidity", 0) or 0) < INITIAL_TREASURY_LAMPORTS
         withdrawal_observed = successful_withdrawal is not None
         exploit_provenance_confirmed = (
             successful_invalid_deposit is not None
@@ -834,11 +952,11 @@ class LiteSVMSandboxRuntime(SandboxRuntime):
         )
         real_protocol_treasury_value_decreased = treasury_drained
         official_path_used = successful_official_deposit is not None
-        exploit_path_only = protocol_state["depositPathType"] == "exploit"
+        exploit_provenance_available = bool(protocol_state.get("hasExploitDeposit"))
         borrowed_total = int(protocol_state["borrowedTotal"])
         max_borrow = int(protocol_state["maxBorrow"])
         available_borrow = int(protocol_state["availableBorrow"])
-        max_drain_satisfied = borrowed_total > 0 and available_borrow == 0
+        max_drain_satisfied = bool(protocol_state.get("maxDrainSatisfied"))
         legitimate_official_borrow_only = (
             official_path_used
             and successful_invalid_deposit is None
@@ -854,7 +972,7 @@ class LiteSVMSandboxRuntime(SandboxRuntime):
                 withdrawal_observed,
                 real_protocol_treasury_value_decreased,
                 exploit_provenance_confirmed,
-                exploit_path_only,
+                exploit_provenance_available,
                 max_drain_satisfied,
             ]
         )
@@ -900,14 +1018,16 @@ class LiteSVMSandboxRuntime(SandboxRuntime):
                 "realProtocolTreasuryValueDecreased": real_protocol_treasury_value_decreased,
                 "exploitProvenanceConfirmed": exploit_provenance_confirmed,
                 "officialPathUsed": official_path_used,
-                "exploitPathOnly": exploit_path_only,
+                "exploitPathOnly": exploit_provenance_available,
+                "hasOfficialDeposit": bool(protocol_state.get("hasOfficialDeposit")),
+                "hasExploitDeposit": exploit_provenance_available,
                 "maxDrainSatisfied": max_drain_satisfied,
             },
             "protocolState": protocol_state,
             "treasuryLamportsBefore": INITIAL_TREASURY_LAMPORTS,
-            "treasuryLamportsAfter": treasury_lamports,
+            "treasuryLamportsAfter": protocol_state["poolLiquidity"],
             "creditedCollateralBefore": 0,
-            "creditedCollateralAfter": credited,
+            "creditedCollateralAfter": protocol_state["creditedCollateral"],
             "borrowedAmount": borrowed_total,
             "maxBorrowAmount": max_borrow,
             "availableBorrowAfter": available_borrow,
@@ -924,12 +1044,12 @@ class LiteSVMSandboxRuntime(SandboxRuntime):
                 failure_reason = "No treasury withdrawal against invalid credit has been observed."
             elif not real_protocol_treasury_value_decreased:
                 failure_reason = "Treasury value did not decrease."
-            elif not exploit_path_only:
-                failure_reason = "Exploit provenance is ambiguous because both official and exploit paths were used."
+            elif not exploit_provenance_available:
+                failure_reason = "No exploit-path collateral deposit has been observed."
             elif not max_drain_satisfied:
                 failure_reason = (
-                    f"Exploit path was used, but the treasury was not drained to the backend-computed max borrow "
-                    f"amount ({max_borrow})."
+                    "Exploit path was used, but the pool was not drained to the backend-computed "
+                    f"max executable amount ({protocol_state.get('maxDrainAmount', 0)})."
                 )
             else:
                 failure_reason = "Exploit provenance requirements were not satisfied."

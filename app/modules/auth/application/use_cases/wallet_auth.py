@@ -58,6 +58,18 @@ class WalletAuthUseCase:
             message=message,
             expires_at=expires_at,
         )
+        await self._analytics.record(
+            event_type="wallet_connect_started",
+            wallet_address=wallet_address,
+            subject_type="wallet",
+            subject_id=wallet_address,
+        )
+        await self._analytics.record(
+            event_type="wallet_nonce_requested",
+            wallet_address=wallet_address,
+            subject_type="wallet",
+            subject_id=wallet_address,
+        )
         return {
             "wallet_address": wallet_address,
             "nonce": nonce,
@@ -75,6 +87,7 @@ class WalletAuthUseCase:
         await self._nonces.consume(nonce_model)
 
         user = await self._users.get_by_wallet_address(wallet_address)
+        user_created = user is None
         if user is None:
             user = await self._users.create(self._wallet_user(wallet_address))
 
@@ -85,6 +98,31 @@ class WalletAuthUseCase:
             subject_type="wallet",
             subject_id=wallet_address,
         )
+        await self._analytics.record(
+            event_type="wallet_connected",
+            user_id=user.id,
+            wallet_address=wallet_address,
+            subject_type="wallet",
+            subject_id=wallet_address,
+            metadata={"userCreated": user_created},
+        )
+        await self._analytics.record(
+            event_type="wallet_login_completed",
+            user_id=user.id,
+            wallet_address=wallet_address,
+            subject_type="wallet",
+            subject_id=wallet_address,
+            metadata={"userCreated": user_created},
+        )
+        if user_created:
+            await self._analytics.record(
+                event_type="user_created",
+                user_id=user.id,
+                wallet_address=wallet_address,
+                subject_type="wallet",
+                subject_id=wallet_address,
+                metadata={"source": "wallet_auth"},
+            )
         return user, self._issue_tokens(user)
 
     async def link_wallet(
