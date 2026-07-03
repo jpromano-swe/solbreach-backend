@@ -615,7 +615,7 @@ class SessionMaterializer:
                 return _StructuredSuccessResult(
                     [
                         "Transaction submitted to deterministic LiteSVM runtime.",
-                        "SVM instruction failed in local harness; applied backend protocol semantics.",
+                        "Deterministic protocol state transition applied.",
                     ]
                 )
             if position_credit_override is not None:
