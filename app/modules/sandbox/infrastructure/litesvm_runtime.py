@@ -25,8 +25,6 @@ from app.modules.sandbox.domain.runtime import (
     resolve_lab_file_path,
     resolve_lab_template_ref,
     SandboxRuntime,
-    SandboxTerminalEvent,
-    SandboxTestResult,
     SandboxTestRunResult,
     SandboxTransactionResult,
     SandboxVerificationResult,
@@ -84,10 +82,45 @@ def _spl_token_data(mint: Pubkey, owner: Pubkey, amount: int) -> bytes:
     return bytes(data)
 
 
+def _position_data(authority: Pubkey, credited_collateral: int) -> bytes:
+    data = bytearray(48)
+    data[0:8] = hashlib.sha256(b"account:Position").digest()[:8]
+    data[8:40] = bytes(authority)
+    data[40:48] = int(credited_collateral).to_bytes(8, "little")
+    return bytes(data)
+
+
 def _position_credit(data: bytes | bytearray) -> int:
     if len(data) < 48:
         return 0
     return int.from_bytes(data[40:48], "little")
+
+
+def _current_position_credit(svm: LiteSVM, position_pda: Pubkey) -> int:
+    account = svm.get_account(position_pda)
+    return _position_credit(account.data) if account is not None else 0
+
+
+def _ensure_position_account(
+    svm: LiteSVM,
+    position_pda: Pubkey,
+    authority: Pubkey,
+    credited_collateral: int,
+) -> None:
+    account = svm.get_account(position_pda)
+    if account is not None and len(account.data) >= 48:
+        _set_position_credit(svm, position_pda, credited_collateral)
+        return
+    svm.set_account(
+        position_pda,
+        Account(
+            lamports=1_000_000,
+            data=_position_data(authority, credited_collateral),
+            owner=PROGRAM_ID,
+            executable=False,
+            rent_epoch=0,
+        ),
+    )
 
 
 def _set_position_credit(svm: LiteSVM, position_pda: Pubkey, credited_collateral: int) -> None:
@@ -450,8 +483,21 @@ class SessionMaterializer:
         )
         bh = svm.latest_blockhash()
         tx = VersionedTransaction(Message.new_with_blockhash([init_ix], self.payer.pubkey(), bh), [self.payer, self.attacker])
-        svm.send_transaction(tx)
-        _set_position_credit(svm, self.position_pda, OFFICIAL_COLLATERAL_START)
+        init_result = svm.send_transaction(tx)
+        position_acc = svm.get_account(self.position_pda)
+        if (
+            isinstance(init_result, FailedTransactionMetadata)
+            or position_acc is None
+            or len(position_acc.data) < 48
+        ):
+            _ensure_position_account(
+                svm,
+                self.position_pda,
+                self.attacker.pubkey(),
+                OFFICIAL_COLLATERAL_START,
+            )
+        else:
+            _set_position_credit(svm, self.position_pda, OFFICIAL_COLLATERAL_START)
 
         t_seed = time.time()
         self.metrics["seed_state_ms"] = (t_seed - t0) * 1000
@@ -483,7 +529,7 @@ class SessionMaterializer:
 
             if collat_ref in COUNTERFEIT_COLLATERAL_REFS:
                 source = self.attacker_collateral_pk
-                current_credit = _position_credit(svm.get_account(self.position_pda).data)
+                current_credit = _current_position_credit(svm, self.position_pda)
                 exploit_credit = COUNTERFEIT_COLLATERAL_START
                 params["executed_amount"] = exploit_credit
                 position_credit_override = current_credit + exploit_credit
@@ -491,7 +537,7 @@ class SessionMaterializer:
                 if amount <= 0:
                     return None
                 source = self.official_collateral_pk
-                current_credit = _position_credit(svm.get_account(self.position_pda).data)
+                current_credit = _current_position_credit(svm, self.position_pda)
                 position_credit_override = current_credit + amount
             else:
                 return None

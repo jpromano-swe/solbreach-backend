@@ -173,7 +173,7 @@ class RedeemBetaAccessCodeUseCase:
         if wallet is None:
             raise WalletRequiredForAccessCodeError("Wallet address is required to redeem access.")
 
-        access_code = await self._repository.get_code_by_hash(hash_access_code(code))
+        access_code = await self._repository.get_code_by_hash_for_update(hash_access_code(code))
         if access_code is None or access_code.status is not BetaAccessCodeStatus.ACTIVE:
             raise InvalidAccessCodeError("Access code is invalid.")
         if access_code.expires_at is not None and utc_datetime(access_code.expires_at) <= datetime.now(UTC):

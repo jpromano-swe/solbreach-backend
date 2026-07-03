@@ -14,7 +14,6 @@ from app.modules.beta_access.application.use_cases.beta_access import (
     GetBetaAccessStatusUseCase,
     RedeemBetaAccessCodeUseCase,
     RequestBetaAccessUseCase,
-    hash_access_code,
 )
 from app.modules.beta_access.infrastructure.repositories.sqlalchemy_beta_access_repository import (
     SQLAlchemyBetaAccessRepository,
@@ -28,13 +27,6 @@ from app.modules.beta_access.presentation.schemas.beta_access import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
-
-
-def _code_hash(code: str) -> str | None:
-    try:
-        return hash_access_code(code)
-    except DomainError:
-        return None
 
 
 def _access_failure_reason(exc: DomainError) -> str:
@@ -69,18 +61,6 @@ async def get_beta_access_status(
         metadata={
             "status": status_data["status"],
             "hasAccess": status_data["hasAccess"],
-            "accessSource": status_data["accessSource"],
-        },
-    )
-    await analytics.record(
-        event_type=(
-            "beta_access_granted" if status_data["hasAccess"] else "beta_access_denied"
-        ),
-        wallet_address=status_data["walletAddress"],
-        subject_type="wallet",
-        subject_id=status_data["walletAddress"],
-        metadata={
-            "status": status_data["status"],
             "accessSource": status_data["accessSource"],
         },
     )
@@ -154,13 +134,12 @@ async def redeem_beta_access_code(
     session: AsyncSession = Depends(get_db_session),
 ) -> BetaAccessStatusResponse:
     analytics = SQLAlchemyAnalyticsRepository(session)
-    code_hash = _code_hash(payload.code)
     await analytics.record(
         event_type="beta_access_code_submitted",
         wallet_address=payload.wallet_address,
         subject_type="wallet",
         subject_id=payload.wallet_address,
-        metadata={"codeHash": code_hash},
+        metadata={"hasCode": True},
     )
     try:
         status_data = await RedeemBetaAccessCodeUseCase(
@@ -173,7 +152,16 @@ async def redeem_beta_access_code(
             subject_type="wallet",
             subject_id=payload.wallet_address,
             metadata={
-                "codeHash": code_hash,
+                "failureReason": _access_failure_reason(exc),
+                "errorCode": getattr(exc, "code", "DOMAIN_ERROR"),
+            },
+        )
+        await analytics.record(
+            event_type="beta_access_denied",
+            wallet_address=payload.wallet_address,
+            subject_type="wallet",
+            subject_id=payload.wallet_address,
+            metadata={
                 "failureReason": _access_failure_reason(exc),
                 "errorCode": getattr(exc, "code", "DOMAIN_ERROR"),
             },
@@ -186,7 +174,16 @@ async def redeem_beta_access_code(
         subject_type="wallet",
         subject_id=status_data["walletAddress"],
         metadata={
-            "codeHash": code_hash,
+            "status": status_data["status"],
+            "accessSource": status_data["accessSource"],
+        },
+    )
+    await analytics.record(
+        event_type="beta_access_granted",
+        wallet_address=status_data["walletAddress"],
+        subject_type="wallet",
+        subject_id=status_data["walletAddress"],
+        metadata={
             "status": status_data["status"],
             "accessSource": status_data["accessSource"],
         },

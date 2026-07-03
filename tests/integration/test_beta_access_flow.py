@@ -155,3 +155,4 @@ async def test_beta_access_redeem_rejects_invalid_expired_and_exhausted_codes(
     assert all("missing" not in str(event.metadata_json).lower() for event in events)
     assert all("old-code" not in str(event.metadata_json).lower() for event in events)
     assert all("used-code" not in str(event.metadata_json).lower() for event in events)
+    assert all("codeHash" not in event.metadata_json for event in events)

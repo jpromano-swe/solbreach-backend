@@ -37,6 +37,9 @@ class BetaAccessRepository(Protocol):
     async def get_code_by_hash(self, code_hash: str) -> BetaAccessCode | None:
         ...
 
+    async def get_code_by_hash_for_update(self, code_hash: str) -> BetaAccessCode | None:
+        ...
+
     async def update_code(self, code: BetaAccessCode) -> BetaAccessCode:
         ...
 

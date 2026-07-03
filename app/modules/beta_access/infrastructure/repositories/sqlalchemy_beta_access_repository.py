@@ -123,6 +123,15 @@ class SQLAlchemyBetaAccessRepository(BetaAccessRepository):
         model = result.scalar_one_or_none()
         return self._code_to_entity(model) if model else None
 
+    async def get_code_by_hash_for_update(self, code_hash: str) -> BetaAccessCode | None:
+        result = await self._session.execute(
+            select(BetaAccessCodeModel)
+            .where(BetaAccessCodeModel.code_hash == code_hash)
+            .with_for_update()
+        )
+        model = result.scalar_one_or_none()
+        return self._code_to_entity(model) if model else None
+
     async def update_code(self, code: BetaAccessCode) -> BetaAccessCode:
         model = await self._session.get(BetaAccessCodeModel, code.id)
         if model is None:
