@@ -7,8 +7,12 @@ from app.core.logging.setup import configure_logging
 from app.core.middleware.request_id import RequestIDMiddleware
 from app.modules.analytics.presentation.api.routes import router as analytics_router
 from app.modules.auth.presentation.api.routes import router as auth_router
+from app.modules.badges.presentation.api.routes import router as badges_router
 from app.modules.beta_access.presentation.api.routes import router as beta_access_router
-from app.modules.certifications.presentation.api.routes import router as certifications_router
+from app.modules.certifications.presentation.api.routes import (
+    certificate_router,
+    router as certifications_router,
+)
 from app.modules.labs.presentation.api.research_lab_routes import (
     router as research_labs_router,
 )
@@ -45,6 +49,7 @@ def create_app() -> FastAPI:
     prefix = settings.api_v1_prefix
     app.include_router(auth_router, prefix=f"{prefix}/auth", tags=["auth"])
     app.include_router(beta_access_router, prefix=f"{prefix}/beta-access", tags=["beta-access"])
+    app.include_router(badges_router, prefix=f"{prefix}/badges", tags=["badges"])
     app.include_router(analytics_router, prefix=f"{prefix}/analytics", tags=["analytics"])
     app.include_router(users_router, prefix=f"{prefix}/users", tags=["users"])
     app.include_router(
@@ -55,6 +60,9 @@ def create_app() -> FastAPI:
     app.include_router(progress_router, prefix=f"{prefix}/progress", tags=["progress"])
     app.include_router(
         certifications_router, prefix=f"{prefix}/certifications", tags=["certifications"]
+    )
+    app.include_router(
+        certificate_router, prefix=f"{prefix}/certificates", tags=["certificates"]
     )
     app.include_router(waitlist_router, prefix=f"{prefix}/waitlist", tags=["waitlist"])
     app.include_router(labs_router, prefix=f"{prefix}/labs", tags=["labs"])

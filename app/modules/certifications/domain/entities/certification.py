@@ -26,6 +26,11 @@ class Certification:
     metadata: dict[str, Any] = field(default_factory=dict)
     unlock_status: CertificationUnlockStatus = CertificationUnlockStatus.UNLOCKED
     mint_status: CertificationMintStatus = CertificationMintStatus.NOT_MINTED
+    wallet_address: str | None = None
+    asset_id: str | None = None
+    certificate_pda: str | None = None
+    metadata_uri: str | None = None
+    minted_at: datetime | None = None
     unlocked_at: datetime | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None

@@ -6,15 +6,23 @@ from app.core.dependencies.auth import get_current_user
 from app.modules.certifications.application.use_cases.list_user_certifications import (
     ListUserCertificationsUseCase,
 )
+from app.modules.certifications.application.use_cases.list_wallet_certificates import (
+    ListWalletCertificatesUseCase,
+)
 from app.modules.certifications.domain.entities.certification import Certification
 from app.modules.certifications.infrastructure.repositories import (
     sqlalchemy_certification_repository,
 )
-from app.modules.certifications.presentation.schemas.certification import CertificationResponse
+from app.modules.certifications.presentation.schemas.certification import (
+    CertificationResponse,
+    WalletCertificatesResponse,
+)
+from app.core.config.settings import get_settings
 from app.modules.users.domain.entities.user import User
 from app.shared.schemas.pagination import PageParams
 
 router = APIRouter()
+certificate_router = APIRouter()
 
 
 def _response(certification: Certification) -> CertificationResponse:
@@ -31,3 +39,15 @@ async def list_my_certifications(
         sqlalchemy_certification_repository.SQLAlchemyCertificationRepository(session)
     ).execute(current_user.id, page.limit, page.offset)
     return [_response(certification) for certification in certifications]
+
+
+@certificate_router.get("/me", response_model=WalletCertificatesResponse)
+async def list_my_wallet_certificates(
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+) -> WalletCertificatesResponse:
+    payload = await ListWalletCertificatesUseCase(
+        sqlalchemy_certification_repository.SQLAlchemyCertificationRepository(session),
+        get_settings().app_base_url,
+    ).execute(current_user)
+    return WalletCertificatesResponse.model_validate(payload)

@@ -7,6 +7,10 @@ from app.core.dependencies.blockchain import get_blockchain_client
 from app.modules.analytics.infrastructure.repositories.sqlalchemy_analytics_repository import (
     SQLAlchemyAnalyticsRepository,
 )
+from app.modules.badges.application.use_cases.badges import EvaluateUserBadgesUseCase
+from app.modules.badges.infrastructure.repositories.sqlalchemy_badge_repository import (
+    SQLAlchemyBadgeRepository,
+)
 from app.modules.certifications.infrastructure.repositories import (
     sqlalchemy_certification_repository,
 )
@@ -381,6 +385,12 @@ async def submit_level(
         events=InMemoryEventPublisher(),
         blockchain=blockchain,
     ).execute(current_user.id, level_id, payload.to_proof())
+    analytics = SQLAlchemyAnalyticsRepository(session)
+    if result.progress is not None:
+        await EvaluateUserBadgesUseCase(
+            SQLAlchemyBadgeRepository(session),
+            analytics,
+        ).earn_for_completed_level(current_user, result.level.order)
     await SQLAlchemyAnalyticsRepository(session).record(
         event_type=(
             "level_submission_verified"

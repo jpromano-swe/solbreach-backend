@@ -8,6 +8,10 @@ from app.core.dependencies.sandbox import get_sandbox_runtime
 from app.modules.analytics.infrastructure.repositories.sqlalchemy_analytics_repository import (
     SQLAlchemyAnalyticsRepository,
 )
+from app.modules.badges.application.use_cases.badges import EvaluateUserBadgesUseCase
+from app.modules.badges.infrastructure.repositories.sqlalchemy_badge_repository import (
+    SQLAlchemyBadgeRepository,
+)
 from app.modules.labs.application.use_cases.research_labs import ResearchLabService
 from app.modules.labs.infrastructure.repositories.sqlalchemy_research_lab_repository import (
     SQLAlchemyResearchLabRepository,
@@ -706,6 +710,15 @@ async def submit_research_lab_report(
 ) -> ResearchLabAPIResponse:
     data = await _service(session, runtime, settings).submit_report(current_user, session_id)
     analytics = SQLAlchemyAnalyticsRepository(session)
+    if data["lab_completed"]:
+        lab_session = await SQLAlchemyResearchLabRepository(session).get_session(session_id)
+        await EvaluateUserBadgesUseCase(
+            SQLAlchemyBadgeRepository(session),
+            analytics,
+        ).earn_for_research_lab_completion(
+            current_user,
+            lab_session.lab_id if lab_session is not None else "",
+        )
     report_metadata = {"status": data["status"], "labCompleted": data["lab_completed"]}
     await analytics.record(
         event_type="report_submitted",

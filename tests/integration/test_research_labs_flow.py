@@ -247,6 +247,16 @@ async def test_rl1_account_substitution_full_backend_flow(
     assert me_response.json()["xp"] == 250
     assert me_response.json()["completed_levels"] == 0
 
+    badges_response = await seeded_client.get("/api/v1/badges/me", headers=headers)
+    assert badges_response.status_code == 200
+    badges = badges_response.json()["badges"]
+    level_1_badge = next(badge for badge in badges if badge["slug"] == "level-1-illusionist")
+    assert level_1_badge["earned"] is True
+    assert level_1_badge["metadata"]["source"] == "research_lab_completion"
+    power_user_badge = next(badge for badge in badges if badge["slug"] == "power-user")
+    assert power_user_badge["earned"] is True
+    assert power_user_badge["metadata"]["source"] == "research_lab_certificate"
+
 
 async def test_research_lab_session_ownership_is_enforced(seeded_client: AsyncClient) -> None:
     await register_user(seeded_client, email="owner@example.com")
