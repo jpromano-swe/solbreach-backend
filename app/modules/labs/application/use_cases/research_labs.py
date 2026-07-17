@@ -184,7 +184,7 @@ class ResearchLabService:
             terminal_events=terminal,
             transaction_count=0,
             report_status=ResearchLabReportStatus.LOCKED.value,
-            protocol_state=_initial_protocol_state(),
+            protocol_state=_initial_protocol_state(manifest),
         )
 
     async def get_session(self, user: User, session_id: str) -> dict:
@@ -196,7 +196,7 @@ class ResearchLabService:
         transactions = await self._repository.list_transactions(session.id)
         report = await self._repository.get_report(session.id)
         latest_protocol_state = (
-            transactions[-1].protocol_state_json if transactions else _initial_protocol_state()
+            transactions[-1].protocol_state_json if transactions else _initial_protocol_state(manifest)
         )
         return _session_payload(
             session,
@@ -732,7 +732,7 @@ class ResearchLabService:
             terminal_events=terminal,
             transaction_count=0,
             report_status=ResearchLabReportStatus.LOCKED.value,
-            protocol_state=_initial_protocol_state(),
+            protocol_state=_initial_protocol_state(manifest),
         )
 
     async def _owned_session(self, user_id: str, session_id: str) -> ResearchLabSessionModel:
@@ -1103,7 +1103,40 @@ def _validate_report(lab_id: str, fields: dict) -> dict:
     return {"accepted": not failed, "failed_checks": failed}
 
 
-def _initial_protocol_state() -> dict:
+def _initial_protocol_state(manifest: ResearchLabManifest | None = None) -> dict:
+    if manifest is not None and manifest.id == "rl2-yield-hijack":
+        return {
+            "pool": {
+                "advertisedApyBps": 250_000,
+                "stakeVaultBalance": 50_000,
+                "rewardVaultBalance": 500_000,
+                "baselineRewardVaultBalance": 500_000,
+            },
+            "position": {
+                "stakedAmount": 50_000,
+                "baselineStakedAmount": 50_000,
+                "pendingRewards": 12_500,
+                "baselinePendingRewards": 12_500,
+            },
+            "attacker": {
+                "stakeBalance": 100,
+                "rewardBalance": 0,
+                "baselineStakeBalance": 100,
+                "baselineRewardBalance": 0,
+            },
+            "victim": {
+                "stakeBalance": 0,
+                "rewardBalance": 0,
+                "baselineStakedAmount": 50_000,
+                "baselinePendingRewards": 12_500,
+            },
+            "successfulStakes": [],
+            "successfulClaims": [],
+            "failedTransactions": [],
+            "attackerStakedTotal": 0,
+            "rewardsClaimedTotal": 0,
+            "positionDerivationCollision": True,
+        }
     return {
         "depositPathType": "none",
         "officialCollateral": 50_000,

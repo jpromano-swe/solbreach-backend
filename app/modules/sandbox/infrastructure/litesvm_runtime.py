@@ -30,6 +30,12 @@ from app.modules.sandbox.domain.runtime import (
     SandboxVerificationResult,
 )
 from app.modules.labs.infrastructure.database.models import ResearchLabTransactionModel
+from app.modules.labs.infrastructure.database.models import ResearchLabSessionModel
+from app.modules.sandbox.infrastructure.yield_hijack_runtime import (
+    YIELD_HIJACK_OBJECTIVE_REF,
+    YIELD_HIJACK_TEMPLATE_REF,
+    YieldHijackRuntime,
+)
 
 TOKEN_PROGRAM_ID = Pubkey.from_string("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA")
 SYS_PROGRAM_ID = Pubkey.from_string("11111111111111111111111111111111")
@@ -641,6 +647,8 @@ class LiteSVMSandboxRuntime(SandboxRuntime):
         pass
 
     async def read_file(self, session_id: str, path: str) -> str:
+        if await self._is_yield_hijack_session(session_id):
+            return await YieldHijackRuntime(self._template_root, self._db_session).read_file(path)
         file_path = (
             self._template_root
             / resolve_lab_template_ref("research-labs/account-substitution@v1")
@@ -663,6 +671,10 @@ class LiteSVMSandboxRuntime(SandboxRuntime):
         pass
 
     async def get_visible_accounts(self, session_id: str) -> list[SandboxAccountSummary]:
+        if await self._is_yield_hijack_session(session_id):
+            return await YieldHijackRuntime(
+                self._template_root, self._db_session
+            ).get_visible_accounts(session_id)
         mat = SessionMaterializer(self._template_root, self._db_session, session_id)
         svm = await mat.materialize()
         tx_result = await self._db_session.execute(
@@ -719,6 +731,10 @@ class LiteSVMSandboxRuntime(SandboxRuntime):
         ]
 
     async def get_account_state(self, session_id: str, account_ref: str) -> SandboxAccountSnapshot:
+        if await self._is_yield_hijack_session(session_id):
+            return await YieldHijackRuntime(
+                self._template_root, self._db_session
+            ).get_account_state(session_id, account_ref)
         mat = SessionMaterializer(self._template_root, self._db_session, session_id)
         svm = await mat.materialize()
         tx_result = await self._db_session.execute(
@@ -813,6 +829,10 @@ class LiteSVMSandboxRuntime(SandboxRuntime):
     async def submit_transaction(
         self, session_id: str, action_type: str, parameters: dict
     ) -> SandboxTransactionResult:
+        if await self._is_yield_hijack_session(session_id):
+            return await YieldHijackRuntime(
+                self._template_root, self._db_session
+            ).submit_transaction(session_id, action_type, parameters)
         mat = SessionMaterializer(self._template_root, self._db_session, session_id)
         svm = await mat.materialize()
         tracked_refs = [
@@ -965,6 +985,12 @@ class LiteSVMSandboxRuntime(SandboxRuntime):
         return tx.logs_json if tx else []
 
     async def verify_objective(self, session_id: str, objective_ref: str) -> SandboxVerificationResult:
+        if await self._is_yield_hijack_session(session_id):
+            if objective_ref != YIELD_HIJACK_OBJECTIVE_REF:
+                raise NotFoundError("Sandbox objective not found")
+            return await YieldHijackRuntime(
+                self._template_root, self._db_session
+            ).verify_objective(session_id, objective_ref)
         mat = SessionMaterializer(self._template_root, self._db_session, session_id)
         svm = await mat.materialize()
 
@@ -1147,3 +1173,9 @@ class LiteSVMSandboxRuntime(SandboxRuntime):
             failure_reason=failure_reason,
             user_facing_evidence=user_facing,
         )
+
+    async def _is_yield_hijack_session(self, session_id: str) -> bool:
+        if self._db_session is None:
+            return False
+        session = await self._db_session.get(ResearchLabSessionModel, session_id)
+        return session is not None and session.template_ref == YIELD_HIJACK_TEMPLATE_REF

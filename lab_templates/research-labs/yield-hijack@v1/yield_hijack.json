@@ -1,0 +1,8 @@
+{
+  "name": "yield_hijack",
+  "version": "1.0.0",
+  "objectiveRef": "RL2_STATIC_PDA_REWARD_HIJACK_IMPACT",
+  "program": "yield_hijack.so",
+  "entryFile": "programs/yield_hijack/src/lib.rs",
+  "runtime": "deterministic_litesvm_harness"
+}

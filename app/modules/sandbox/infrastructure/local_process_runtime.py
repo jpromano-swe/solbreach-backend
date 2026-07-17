@@ -8,18 +8,26 @@ from copy import deepcopy
 from pathlib import Path
 from uuid import uuid4
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.core.exceptions.domain import ConflictError, NotFoundError
+from app.modules.labs.infrastructure.database.models import ResearchLabSessionModel
 from app.modules.sandbox.domain.runtime import (
     SandboxAccountSnapshot,
     SandboxAccountSummary,
-    resolve_lab_file_path,
-    resolve_lab_template_ref,
     SandboxRuntime,
     SandboxTerminalEvent,
     SandboxTestResult,
     SandboxTestRunResult,
     SandboxTransactionResult,
     SandboxVerificationResult,
+    resolve_lab_file_path,
+    resolve_lab_template_ref,
+)
+from app.modules.sandbox.infrastructure.yield_hijack_runtime import (
+    YIELD_HIJACK_OBJECTIVE_REF,
+    YIELD_HIJACK_TEMPLATE_REF,
+    YieldHijackRuntime,
 )
 
 TEST_LABELS = {
@@ -52,9 +60,15 @@ COUNTERFEIT_COLLATERAL_START = 500_000
 class LocalProcessSandboxRuntime(SandboxRuntime):
     """Backend development runtime backed by a per-session local workspace."""
 
-    def __init__(self, template_root: Path, workspace_root: Path) -> None:
+    def __init__(
+        self,
+        template_root: Path,
+        workspace_root: Path,
+        db_session: AsyncSession | None = None,
+    ) -> None:
         self._template_root = template_root
         self._workspace_root = workspace_root
+        self._db_session = db_session
 
     async def create_session(self, session_id: str, template_ref: str) -> str:
         await self.hydrate_template(session_id, template_ref)
@@ -73,6 +87,8 @@ class LocalProcessSandboxRuntime(SandboxRuntime):
             self._write_state(session_id, _initial_treasury_mirage_state())
 
     async def read_file(self, session_id: str, path: str) -> str:
+        if await self._is_yield_hijack_session(session_id):
+            return await self._yield_hijack_runtime().read_file(path)
         file_path = self._safe_file_path(session_id, path)
         if not file_path.exists() or not file_path.is_file():
             raise NotFoundError("Sandbox file not found")
@@ -136,6 +152,8 @@ class LocalProcessSandboxRuntime(SandboxRuntime):
             shutil.rmtree(workspace)
 
     async def get_visible_accounts(self, session_id: str) -> list[SandboxAccountSummary]:
+        if await self._is_yield_hijack_session(session_id):
+            return await self._yield_hijack_runtime().get_visible_accounts(session_id)
         state = self._read_state(session_id)
         return [
             SandboxAccountSummary(
@@ -152,6 +170,10 @@ class LocalProcessSandboxRuntime(SandboxRuntime):
     async def get_account_state(
         self, session_id: str, account_ref: str
     ) -> SandboxAccountSnapshot:
+        if await self._is_yield_hijack_session(session_id):
+            return await self._yield_hijack_runtime().get_account_state(
+                session_id, account_ref
+            )
         state = self._read_state(session_id)
         storage_ref = "attacker_position" if account_ref == "position" else account_ref
         account = state["accounts"].get(storage_ref)
@@ -173,6 +195,10 @@ class LocalProcessSandboxRuntime(SandboxRuntime):
     async def submit_transaction(
         self, session_id: str, action_type: str, parameters: dict
     ) -> SandboxTransactionResult:
+        if await self._is_yield_hijack_session(session_id):
+            return await self._yield_hijack_runtime().submit_transaction(
+                session_id, action_type, parameters
+            )
         state = self._read_state(session_id)
         if state["lab_slug"] != "account-substitution":
             raise ConflictError("Sandbox transactions are not configured for this lab")
@@ -229,6 +255,12 @@ class LocalProcessSandboxRuntime(SandboxRuntime):
     async def verify_objective(
         self, session_id: str, objective_ref: str
     ) -> SandboxVerificationResult:
+        if await self._is_yield_hijack_session(session_id):
+            if objective_ref != YIELD_HIJACK_OBJECTIVE_REF:
+                raise NotFoundError("Sandbox objective not found")
+            return await self._yield_hijack_runtime().verify_objective(
+                session_id, objective_ref
+            )
         state = self._read_state(session_id)
         if objective_ref != "RL1_ACCOUNT_SUBSTITUTION_IMPACT":
             raise NotFoundError("Sandbox objective not found")
@@ -371,6 +403,17 @@ class LocalProcessSandboxRuntime(SandboxRuntime):
     def _write_state(self, session_id: str, state: dict) -> None:
         state_path = self._state_path(session_id)
         state_path.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
+
+    def _yield_hijack_runtime(self) -> YieldHijackRuntime:
+        if self._db_session is None:
+            raise ConflictError("Sandbox state is not available for this session")
+        return YieldHijackRuntime(self._template_root, self._db_session)
+
+    async def _is_yield_hijack_session(self, session_id: str) -> bool:
+        if self._db_session is None:
+            return False
+        session = await self._db_session.get(ResearchLabSessionModel, session_id)
+        return session is not None and session.template_ref == YIELD_HIJACK_TEMPLATE_REF
 
 
 def _terminal_events(stream: str, text: str) -> list[SandboxTerminalEvent]:

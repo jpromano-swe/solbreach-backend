@@ -24,4 +24,5 @@ def get_sandbox_runtime(session: AsyncSession = Depends(get_db_session)) -> Sand
         return LocalProcessSandboxRuntime(
             template_root=template_root,
             workspace_root=workspace_root,
+            db_session=session,
         )

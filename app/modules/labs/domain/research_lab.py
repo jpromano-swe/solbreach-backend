@@ -168,4 +168,68 @@ RL1_ACCOUNT_SUBSTITUTION_MANIFEST = ResearchLabManifest(
 )
 
 
-RESEARCH_LABS = [RL1_ACCOUNT_SUBSTITUTION_MANIFEST]
+RL2_YIELD_HIJACK_MANIFEST = ResearchLabManifest(
+    id="rl2-yield-hijack",
+    version="1.0.0",
+    slug="yield-hijack",
+    aliases=["rl-002", "yield-hijack"],
+    lab_code="RL2",
+    title="Yield Hijack",
+    difficulty="intermediate",
+    estimated_time="45-75 minutes",
+    xp_reward=300,
+    status="active",
+    summary=(
+        "Inspect a high-APY staking pool and prove how a staking-position PDA scoped only "
+        "to the pool lets an attacker inherit another user's rewards."
+    ),
+    scenario_briefing=(
+        "A victim has already staked into a promotional yield pool and accrued rewards. "
+        "Your job is to inspect the staking position derivation, execute controlled staking "
+        "and reward-claim actions, and prove whether the position identity is shared across users."
+    ),
+    objective=(
+        "Prove that a staking-position PDA derived from only the pool address lets an attacker "
+        "overwrite the position owner, preserve the victim's principal and pending rewards, then "
+        "claim those rewards."
+    ),
+    allowed_files=["programs/yield_hijack/src/lib.rs"],
+    entry_file="programs/yield_hijack/src/lib.rs",
+    test_command="",
+    template_ref="research-labs/yield-hijack@v1",
+    objective_ref="RL2_STATIC_PDA_REWARD_HIJACK_IMPACT",
+    visible_account_refs=[
+        "pool_config",
+        "pool_authority",
+        "stake_mint",
+        "reward_mint",
+        "stake_vault",
+        "reward_vault",
+        "stake_position",
+        "attacker_stake_account",
+        "attacker_reward_account",
+        "victim_stake_account",
+        "victim_reward_account",
+    ],
+    objectives=[
+        "Inspect staking position PDA derivation",
+        "Attempt a reward claim before ownership takeover",
+        "Stake as the attacker and observe position ownership",
+        "Claim pre-existing rewards and prove reward-vault impact",
+    ],
+    hints=[
+        ResearchLabHint(
+            id="position-seeds",
+            title="Hint 1",
+            body="Compare which seeds are used for the victim and attacker staking positions.",
+        ),
+        ResearchLabHint(
+            id="reward-claim-owner",
+            title="Hint 2",
+            body="The reward claim checks the stored position owner, not the original depositor.",
+        ),
+    ],
+)
+
+
+RESEARCH_LABS = [RL1_ACCOUNT_SUBSTITUTION_MANIFEST, RL2_YIELD_HIJACK_MANIFEST]
