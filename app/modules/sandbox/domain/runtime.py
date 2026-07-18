@@ -49,6 +49,7 @@ class SandboxExplorerSnapshot:
     program: dict
     accounts: list[dict]
     reward_candidates: list[dict] = field(default_factory=list)
+    reward_asset: dict | None = None
     total_rewards_paid: int = 0
     enabled: bool = True
     reason: str | None = None

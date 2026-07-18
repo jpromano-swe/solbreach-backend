@@ -178,13 +178,29 @@ async def test_rl2_explorer_snapshot_contract(seeded_client: AsyncClient) -> Non
     assert accounts_by_ref["stake_position"]["ownerProgram"] == program_address
     assert accounts_by_ref["stake_position"]["accountType"] == "StakePosition"
     assert accounts_by_ref["stake_position"]["data"]["pendingRewards"] == 12_500
+    assert accounts_by_ref["reward_mint"]["data"]["symbol"] == "USDC"
     assert explorer["rewardCandidates"] == [
         {
             "walletAddress": accounts_by_ref["stake_position"]["data"]["baselineOwner"],
             "positionAddress": accounts_by_ref["stake_position"]["address"],
+            "positionRef": "stake_position",
+            "positionLabel": "Staking Position",
             "pendingRewards": 12_500,
+            "rewardMintRef": "reward_mint",
+            "rewardSymbol": "USDC",
         }
     ]
+    candidate = explorer["rewardCandidates"][0]
+    assert accounts_by_ref[candidate["positionRef"]]["address"] == candidate["positionAddress"]
+    assert "claimInstruction" not in candidate
+    assert "recommendedAction" not in candidate
+    assert "instructionName" not in candidate
+    assert "instruction_name" not in candidate
+    assert explorer["rewardAsset"] == {
+        "mintRef": "reward_mint",
+        "symbol": "USDC",
+        "decimals": 6,
+    }
     assert explorer["totalRewardsPaid"] == 14_325
 
     repeat = (
@@ -229,6 +245,7 @@ async def test_rl2_stake_claim_and_verify_flow(seeded_client: AsyncClient) -> No
         )
     ).json()["data"]
     victim_wallet = initial_explorer["rewardCandidates"][0]["walletAddress"]
+    initial_candidate = initial_explorer["rewardCandidates"][0]
 
     missing_instruction = await _claim(
         seeded_client, headers, session_id, victim_wallet, instruction_name=None
@@ -241,6 +258,13 @@ async def test_rl2_stake_claim_and_verify_flow(seeded_client: AsyncClient) -> No
     assert (
         missing_instruction.json()["data"]["protocolState"]["position"]["pendingRewards"] == 12_500
     )
+    after_missing_instruction_explorer = (
+        await seeded_client.get(
+            f"/api/v1/research-labs/sessions/{session_id}/explorer",
+            headers=headers,
+        )
+    ).json()["data"]
+    assert after_missing_instruction_explorer["rewardCandidates"] == [initial_candidate]
 
     invalid_instruction = await _claim(
         seeded_client,
@@ -257,6 +281,13 @@ async def test_rl2_stake_claim_and_verify_flow(seeded_client: AsyncClient) -> No
     assert (
         invalid_instruction.json()["data"]["protocolState"]["position"]["pendingRewards"] == 12_500
     )
+    after_invalid_instruction_explorer = (
+        await seeded_client.get(
+            f"/api/v1/research-labs/sessions/{session_id}/explorer",
+            headers=headers,
+        )
+    ).json()["data"]
+    assert after_invalid_instruction_explorer["rewardCandidates"] == [initial_candidate]
 
     missing_target = await _claim(seeded_client, headers, session_id)
     assert missing_target.status_code == 200
@@ -265,6 +296,13 @@ async def test_rl2_stake_claim_and_verify_flow(seeded_client: AsyncClient) -> No
         "TARGET_WALLET_REQUIRED"
     )
     assert missing_target.json()["data"]["protocolState"]["position"]["pendingRewards"] == 12_500
+    after_missing_target_explorer = (
+        await seeded_client.get(
+            f"/api/v1/research-labs/sessions/{session_id}/explorer",
+            headers=headers,
+        )
+    ).json()["data"]
+    assert after_missing_target_explorer["rewardCandidates"] == [initial_candidate]
 
     invalid_target = await _claim(
         seeded_client, headers, session_id, "11111111111111111111111111111111"
@@ -275,6 +313,13 @@ async def test_rl2_stake_claim_and_verify_flow(seeded_client: AsyncClient) -> No
         "INVALID_TARGET_WALLET"
     )
     assert invalid_target.json()["data"]["protocolState"]["position"]["pendingRewards"] == 12_500
+    after_invalid_target_explorer = (
+        await seeded_client.get(
+            f"/api/v1/research-labs/sessions/{session_id}/explorer",
+            headers=headers,
+        )
+    ).json()["data"]
+    assert after_invalid_target_explorer["rewardCandidates"] == [initial_candidate]
 
     early_claim = await _claim(seeded_client, headers, session_id, victim_wallet)
     assert early_claim.status_code == 200
@@ -282,11 +327,25 @@ async def test_rl2_stake_claim_and_verify_flow(seeded_client: AsyncClient) -> No
     assert early_claim.json()["data"]["protocolState"]["lastRejectedReason"] == (
         "INVALID_POSITION_OWNER"
     )
+    after_early_claim_explorer = (
+        await seeded_client.get(
+            f"/api/v1/research-labs/sessions/{session_id}/explorer",
+            headers=headers,
+        )
+    ).json()["data"]
+    assert after_early_claim_explorer["rewardCandidates"] == [initial_candidate]
 
     zero_stake = await _stake(seeded_client, headers, session_id, 0)
     assert zero_stake.status_code == 200
     assert zero_stake.json()["data"]["executionStatus"] == "failure"
     assert zero_stake.json()["data"]["protocolState"]["lastRejectedReason"] == "INVALID_AMOUNT"
+    after_zero_stake_explorer = (
+        await seeded_client.get(
+            f"/api/v1/research-labs/sessions/{session_id}/explorer",
+            headers=headers,
+        )
+    ).json()["data"]
+    assert after_zero_stake_explorer["rewardCandidates"] == [initial_candidate]
 
     excessive_stake = await _stake(seeded_client, headers, session_id, 101)
     assert excessive_stake.status_code == 200
@@ -321,6 +380,8 @@ async def test_rl2_stake_claim_and_verify_flow(seeded_client: AsyncClient) -> No
         )
     ).json()["data"]
     assert after_stake_explorer["rewardCandidates"][0]["walletAddress"] == victim_wallet
+    assert after_stake_explorer["rewardCandidates"][0]["positionRef"] == "stake_position"
+    assert after_stake_explorer["rewardCandidates"][0]["rewardSymbol"] == "USDC"
     assert after_stake_explorer["rewardCandidates"][0]["pendingRewards"] == 12_500
 
     claim = await _claim(seeded_client, headers, session_id, victim_wallet)

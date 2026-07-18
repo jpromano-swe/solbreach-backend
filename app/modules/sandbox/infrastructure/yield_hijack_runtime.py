@@ -37,6 +37,8 @@ STAKE_VAULT_INITIAL_BALANCE = 50_000
 REWARD_VAULT_INITIAL_BALANCE = 500_000
 ADVERTISED_APY_BPS = 250_000
 POOL_REWARDS_PAID_BASELINE = 14_325
+REWARD_DISPLAY_SYMBOL = "USDC"
+REWARD_DISPLAY_DECIMALS = 6
 TOKEN_PROGRAM_ID = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
 
 YIELD_ACCOUNT_LABELS = {
@@ -303,7 +305,7 @@ class YieldHijackRuntime:
             ),
             _summary("pool_authority", pubkeys["pool_authority"], {"pool": str(mat.pool_config)}),
             _summary("stake_mint", pubkeys["stake_mint"], {"symbol": "STAKE"}),
-            _summary("reward_mint", pubkeys["reward_mint"], {"symbol": "REWARD"}),
+            _summary("reward_mint", pubkeys["reward_mint"], {"symbol": REWARD_DISPLAY_SYMBOL}),
             _summary(
                 "stake_vault",
                 pubkeys["stake_vault"],
@@ -392,6 +394,11 @@ class YieldHijackRuntime:
                 ]
             ],
             reward_candidates=_reward_candidates(state),
+            reward_asset={
+                "mintRef": "reward_mint",
+                "symbol": REWARD_DISPLAY_SYMBOL,
+                "decimals": REWARD_DISPLAY_DECIMALS,
+            },
             total_rewards_paid=state.pool["totalRewardsPaid"],
         )
 
@@ -632,7 +639,11 @@ def _reward_candidates(state: YieldHijackState) -> list[dict]:
         {
             "walletAddress": state.position["baselineOwner"],
             "positionAddress": state.position["address"],
+            "positionRef": "stake_position",
+            "positionLabel": YIELD_ACCOUNT_LABELS["stake_position"],
             "pendingRewards": pending_rewards,
+            "rewardMintRef": "reward_mint",
+            "rewardSymbol": REWARD_DISPLAY_SYMBOL,
         }
     ]
 
@@ -659,7 +670,7 @@ def _account_data(ref: str, state: YieldHijackState, mat: YieldHijackMaterialize
     if ref == "stake_mint":
         return {"symbol": "STAKE"}
     if ref == "reward_mint":
-        return {"symbol": "REWARD"}
+        return {"symbol": REWARD_DISPLAY_SYMBOL}
     return {}
 
 
