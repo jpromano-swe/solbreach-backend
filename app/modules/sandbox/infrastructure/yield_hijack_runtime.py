@@ -27,6 +27,7 @@ from app.modules.sandbox.domain.runtime import (
 
 YIELD_HIJACK_TEMPLATE_REF = "research-labs/yield-hijack@v1"
 YIELD_HIJACK_OBJECTIVE_REF = "RL2_STATIC_PDA_REWARD_HIJACK_IMPACT"
+CANONICAL_CLAIM_INSTRUCTION = "claim_rewards"
 
 VICTIM_STAKED_AMOUNT = 50_000
 VICTIM_PENDING_REWARDS = 12_500
@@ -182,6 +183,8 @@ class YieldHijackMaterializer:
                     }
                 )
             elif action == "CLAIM_REWARDS":
+                if params.get("instruction_name") != CANONICAL_CLAIM_INSTRUCTION:
+                    continue
                 amount = int(params.get("claimed_amount") or 0)
                 if amount <= 0:
                     continue
@@ -458,7 +461,10 @@ class YieldHijackRuntime:
             (
                 tx
                 for tx in tx_models
-                if tx.execution_status == "success" and tx.instruction_type == "CLAIM_REWARDS"
+                if tx.execution_status == "success"
+                and tx.instruction_type == "CLAIM_REWARDS"
+                and (tx.parameters_json or {}).get("instruction_name")
+                == CANONICAL_CLAIM_INSTRUCTION
             ),
             None,
         )
@@ -684,6 +690,21 @@ def _execute_stake(
 def _execute_claim(
     state: YieldHijackState, params: dict
 ) -> tuple[bool, str | None, list[str], dict]:
+    instruction_name = params.get("instruction_name")
+    if not instruction_name:
+        return (
+            False,
+            "INSTRUCTION_NAME_REQUIRED",
+            ["Claim instruction name is required."],
+            params,
+        )
+    if instruction_name != CANONICAL_CLAIM_INSTRUCTION:
+        return (
+            False,
+            "INVALID_INSTRUCTION_NAME",
+            ["Claim instruction name must match the public IDL instruction."],
+            params,
+        )
     required_refs = {
         "position_account_ref": "stake_position",
         "reward_vault_ref": "reward_vault",
@@ -729,6 +750,8 @@ def _failure_summary(code: str | None) -> str:
         "INVALID_AMOUNT": "Stake amount must be greater than zero.",
         "INSUFFICIENT_STAKE_BALANCE": "Stake amount exceeds the attacker stake balance.",
         "INVALID_ACCOUNT_REF": "One or more account refs do not belong to this session action.",
+        "INSTRUCTION_NAME_REQUIRED": "Claim instruction name is required.",
+        "INVALID_INSTRUCTION_NAME": "Claim instruction name must be claim_rewards.",
         "TARGET_WALLET_REQUIRED": "Target wallet address is required.",
         "INVALID_TARGET_WALLET": "Target wallet does not match the reward candidate.",
         "INVALID_POSITION_OWNER": "The attacker does not own the staking position yet.",

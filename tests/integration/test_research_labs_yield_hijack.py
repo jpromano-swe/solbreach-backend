@@ -45,12 +45,15 @@ async def _claim(
     headers: dict[str, str],
     session_id: str,
     target_wallet_address: str | None = None,
+    instruction_name: str | None = "claim_rewards",
 ):
     parameters = {
         "position_account_ref": "stake_position",
         "reward_vault_ref": "reward_vault",
         "destination_account_ref": "attacker_reward_account",
     }
+    if instruction_name is not None:
+        parameters["instruction_name"] = instruction_name
     if target_wallet_address is not None:
         parameters["target_wallet_address"] = target_wallet_address
     return await client.post(
@@ -226,6 +229,34 @@ async def test_rl2_stake_claim_and_verify_flow(seeded_client: AsyncClient) -> No
     ).json()["data"]
     victim_wallet = initial_explorer["rewardCandidates"][0]["walletAddress"]
 
+    missing_instruction = await _claim(
+        seeded_client, headers, session_id, victim_wallet, instruction_name=None
+    )
+    assert missing_instruction.status_code == 200
+    assert missing_instruction.json()["data"]["executionStatus"] == "failure"
+    assert missing_instruction.json()["data"]["protocolState"]["lastRejectedReason"] == (
+        "INSTRUCTION_NAME_REQUIRED"
+    )
+    assert (
+        missing_instruction.json()["data"]["protocolState"]["position"]["pendingRewards"] == 12_500
+    )
+
+    invalid_instruction = await _claim(
+        seeded_client,
+        headers,
+        session_id,
+        victim_wallet,
+        instruction_name="claimReward",
+    )
+    assert invalid_instruction.status_code == 200
+    assert invalid_instruction.json()["data"]["executionStatus"] == "failure"
+    assert invalid_instruction.json()["data"]["protocolState"]["lastRejectedReason"] == (
+        "INVALID_INSTRUCTION_NAME"
+    )
+    assert (
+        invalid_instruction.json()["data"]["protocolState"]["position"]["pendingRewards"] == 12_500
+    )
+
     missing_target = await _claim(seeded_client, headers, session_id)
     assert missing_target.status_code == 200
     assert missing_target.json()["data"]["executionStatus"] == "failure"
@@ -292,6 +323,7 @@ async def test_rl2_stake_claim_and_verify_flow(seeded_client: AsyncClient) -> No
     assert claim.status_code == 200
     claim_data = claim.json()["data"]
     assert claim_data["executionStatus"] == "success"
+    assert claim_data["parameters"]["instruction_name"] == "claim_rewards"
     claim_state = claim_data["protocolState"]
     assert claim_state["attacker"]["rewardBalance"] == 12_500
     assert claim_state["pool"]["rewardVaultBalance"] == 487_500

@@ -1004,6 +1004,8 @@ def _transaction_payload(
         "instructionType": transaction.instruction_type,
         "execution_status": transaction.execution_status,
         "executionStatus": transaction.execution_status,
+        "parameters": transaction.parameters_json,
+        "parametersJson": transaction.parameters_json,
         "logs": transaction.logs_json,
         "account_deltas": transaction.account_deltas_json,
         "accountDeltas": transaction.account_deltas_json,
