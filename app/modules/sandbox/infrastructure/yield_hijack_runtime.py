@@ -36,6 +36,7 @@ ATTACKER_INITIAL_REWARD = 0
 STAKE_VAULT_INITIAL_BALANCE = 50_000
 REWARD_VAULT_INITIAL_BALANCE = 500_000
 ADVERTISED_APY_BPS = 250_000
+POOL_REWARDS_PAID_BASELINE = 14_325
 TOKEN_PROGRAM_ID = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
 
 YIELD_ACCOUNT_LABELS = {
@@ -199,6 +200,8 @@ class YieldHijackMaterializer:
                     }
                 )
 
+        session_rewards_claimed = sum(item["amount"] for item in successful_claims)
+        total_rewards_paid = POOL_REWARDS_PAID_BASELINE + session_rewards_claimed
         pool = {
             "address": str(self.pool_config),
             "authority": str(self.pool_authority),
@@ -208,6 +211,7 @@ class YieldHijackMaterializer:
             "stakeVaultBalance": stake_vault_balance,
             "rewardVaultBalance": reward_vault_balance,
             "baselineRewardVaultBalance": REWARD_VAULT_INITIAL_BALANCE,
+            "totalRewardsPaid": total_rewards_paid,
         }
         position = {
             "address": str(self.stake_position),
@@ -290,7 +294,12 @@ class YieldHijackRuntime:
         pubkeys = mat.account_pubkeys()
         return [
             _summary(
-                "pool_config", pubkeys["pool_config"], {"advertisedApyBps": ADVERTISED_APY_BPS}
+                "pool_config",
+                pubkeys["pool_config"],
+                {
+                    "advertisedApyBps": ADVERTISED_APY_BPS,
+                    "totalRewardsPaid": state.pool["totalRewardsPaid"],
+                },
             ),
             _summary("pool_authority", pubkeys["pool_authority"], {"pool": str(mat.pool_config)}),
             _summary("stake_mint", pubkeys["stake_mint"], {"symbol": "STAKE"}),
@@ -383,7 +392,7 @@ class YieldHijackRuntime:
                 ]
             ],
             reward_candidates=_reward_candidates(state),
-            total_rewards_paid=sum(item["amount"] for item in state.successful_claims),
+            total_rewards_paid=state.pool["totalRewardsPaid"],
         )
 
     async def submit_transaction(
@@ -838,6 +847,7 @@ def _protocol_state(state: YieldHijackState) -> dict:
         "failedTransactions": state.failed_transactions,
         "attackerStakedTotal": sum(item["amount"] for item in state.successful_stakes),
         "rewardsClaimedTotal": sum(item["amount"] for item in state.successful_claims),
+        "totalRewardsPaid": state.pool["totalRewardsPaid"],
         "positionDerivationCollision": (
             state.derivations["victim_position"]["address"]
             == state.derivations["attacker_position"]["address"]
