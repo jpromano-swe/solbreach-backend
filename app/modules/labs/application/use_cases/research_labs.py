@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime, timedelta
-from uuid import uuid4
 from pathlib import PurePosixPath
+from uuid import uuid4
 
 from app.core.config.settings import Settings
 from app.core.exceptions.domain import ConflictError, ForbiddenError, NotFoundError
@@ -28,6 +28,7 @@ from app.modules.labs.infrastructure.repositories.sqlalchemy_research_lab_reposi
 from app.modules.sandbox.domain.runtime import (
     SandboxAccountSnapshot,
     SandboxAccountSummary,
+    SandboxExplorerSnapshot,
     SandboxRuntime,
     SandboxTerminalEvent,
 )
@@ -88,12 +89,8 @@ RL1_REPORT_OPTIONS: dict[str, list[dict[str, str]]] = {
             "label": "Medium-High — attacker controls supplied account set",
         }
     ],
-    "categoryOptionId": [
-        {"id": "account_substitution", "label": "Account substitution"}
-    ],
-    "rootCauseOptionId": [
-        {"id": "missing_account_binding", "label": "Missing account binding"}
-    ],
+    "categoryOptionId": [{"id": "account_substitution", "label": "Account substitution"}],
+    "rootCauseOptionId": [{"id": "missing_account_binding", "label": "Missing account binding"}],
     "proofOfImpactOptionId": [
         {
             "id": "counterfeit_credit_withdraws_treasury",
@@ -196,7 +193,9 @@ class ResearchLabService:
         transactions = await self._repository.list_transactions(session.id)
         report = await self._repository.get_report(session.id)
         latest_protocol_state = (
-            transactions[-1].protocol_state_json if transactions else _initial_protocol_state(manifest)
+            transactions[-1].protocol_state_json
+            if transactions
+            else _initial_protocol_state(manifest)
         )
         return _session_payload(
             session,
@@ -333,6 +332,11 @@ class ResearchLabService:
         account = await self._runtime.get_account_state(session.id, account_ref)
         return {"session_id": session.id, "account": _account_snapshot_payload(account)}
 
+    async def get_explorer(self, user: User, session_id: str) -> dict:
+        session = await self._owned_session(user.id, session_id)
+        snapshot = await self._runtime.get_explorer_snapshot(session.id)
+        return _explorer_payload(snapshot)
+
     async def submit_transaction(
         self, user: User, session_id: str, action_type: str, parameters: dict
     ) -> dict:
@@ -370,14 +374,16 @@ class ResearchLabService:
             "transactions": [_transaction_payload(transaction) for transaction in transactions],
         }
 
-    async def transaction_logs(
-        self, user: User, session_id: str, transaction_ref: str
-    ) -> dict:
+    async def transaction_logs(self, user: User, session_id: str, transaction_ref: str) -> dict:
         session = await self._owned_session(user.id, session_id)
         transaction = await self._repository.get_transaction(session.id, transaction_ref)
         if transaction is None:
             raise NotFoundError("Research lab transaction not found")
-        return {"session_id": session.id, "transaction_ref": transaction_ref, "logs": transaction.logs_json}
+        return {
+            "session_id": session.id,
+            "transaction_ref": transaction_ref,
+            "logs": transaction.logs_json,
+        }
 
     async def verify_objective(
         self, user: User, session_id: str, objective_ref: str | None
@@ -426,7 +432,9 @@ class ResearchLabService:
             "verifiedEvidenceRefs": session.verified_evidence_refs_json,
             "reportUnlocked": session.impact_verified,
             "certificateUnlockable": _certificate_unlockable(session),
-            "phase": _phase_for(session, transaction_count=await self._repository.count_transactions(session.id)),
+            "phase": _phase_for(
+                session, transaction_count=await self._repository.count_transactions(session.id)
+            ),
             "evidence": result.evidence,
             "failureReason": result.failure_reason,
             "userFacingEvidence": result.user_facing_evidence,
@@ -516,10 +524,14 @@ class ResearchLabService:
         evidence_refs = list(fields.get("verifiedEvidenceRefs") or [])
         if not evidence_refs:
             validation["accepted"] = False
-            validation["failed_checks"] = list(validation["failed_checks"]) + ["verifiedEvidenceRefs"]
+            validation["failed_checks"] = list(validation["failed_checks"]) + [
+                "verifiedEvidenceRefs"
+            ]
         elif not set(evidence_refs).issubset(set(session.verified_evidence_refs_json)):
             validation["accepted"] = False
-            validation["failed_checks"] = list(validation["failed_checks"]) + ["verifiedEvidenceRefs"]
+            validation["failed_checks"] = list(validation["failed_checks"]) + [
+                "verifiedEvidenceRefs"
+            ]
         now = datetime.now(UTC)
 
         if validation["accepted"]:
@@ -631,7 +643,9 @@ class ResearchLabService:
             "status": (
                 "passed"
                 if session.finding_review_passed
-                else "retry" if session.finding_review_attempts > 0 else "draft"
+                else "retry"
+                if session.finding_review_attempts > 0
+                else "draft"
             ),
             "impactVerified": session.impact_verified,
             "reportUnlocked": session.impact_verified,
@@ -719,9 +733,7 @@ class ResearchLabService:
         await self._repository.append_terminal_events(
             session_id=session.id,
             test_run_id=None,
-            events=[
-                SandboxTerminalEvent("system", "Session reset. Environment restored.")
-            ],
+            events=[SandboxTerminalEvent("system", "Session reset. Environment restored.")],
         )
         await self._repository.update_session(session)
         terminal = await self._repository.list_terminal_events(session.id, None)
@@ -960,6 +972,20 @@ def _account_snapshot_payload(account: SandboxAccountSnapshot) -> dict:
     }
 
 
+def _explorer_payload(snapshot: SandboxExplorerSnapshot) -> dict:
+    return {
+        "session_id": snapshot.session_id,
+        "sessionId": snapshot.session_id,
+        "enabled": snapshot.enabled,
+        "reason": snapshot.reason,
+        "network": snapshot.network,
+        "program": snapshot.program,
+        "accounts": snapshot.accounts,
+        "rewardCandidates": snapshot.reward_candidates,
+        "totalRewardsPaid": snapshot.total_rewards_paid,
+    }
+
+
 def _transaction_payload(
     transaction: ResearchLabTransactionModel,
     *,
@@ -968,8 +994,7 @@ def _transaction_payload(
 ) -> dict:
     effective_protocol_state = protocol_state or transaction.protocol_state_json or {}
     treasury_impact_observed = any(
-        int(delta.get("lamportsDelta", 0) or 0) < 0
-        and delta.get("accountRef") == "treasury_vault"
+        int(delta.get("lamportsDelta", 0) or 0) < 0 and delta.get("accountRef") == "treasury_vault"
         for delta in (transaction.account_deltas_json or [])
     )
     return {

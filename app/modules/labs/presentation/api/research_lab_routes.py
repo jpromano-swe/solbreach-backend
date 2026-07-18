@@ -242,6 +242,24 @@ async def patch_research_lab_files(
 
 
 @router.get(
+    "/sessions/{session_id}/explorer",
+    response_model=ResearchLabAPIResponse,
+    summary="Get Research Lab explorer snapshot",
+    description=("Returns a session-scoped, learner-safe explorer projection for supported labs."),
+)
+async def get_research_lab_explorer(
+    session_id: str,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+    runtime: SandboxRuntime = Depends(get_sandbox_runtime),
+    settings: Settings = Depends(get_settings),
+) -> ResearchLabAPIResponse:
+    data = await _service(session, runtime, settings).get_explorer(current_user, session_id)
+    await session.commit()
+    return ResearchLabAPIResponse(data=data)
+
+
+@router.get(
     "/sessions/{session_id}/accounts",
     response_model=ResearchLabAPIResponse,
     summary="List visible Research Lab accounts",
@@ -596,9 +614,7 @@ async def submit_research_lab_finding_review(
     }
     await analytics.record(
         event_type=(
-            "finding_review_passed"
-            if data["findingReviewPassed"]
-            else "finding_review_retry"
+            "finding_review_passed" if data["findingReviewPassed"] else "finding_review_retry"
         ),
         user_id=current_user.id,
         wallet_address=current_user.wallet_address,
@@ -731,9 +747,7 @@ async def submit_research_lab_report(
     )
     await analytics.record(
         event_type=(
-            "research_lab_completed"
-            if data["lab_completed"]
-            else "research_lab_report_retry"
+            "research_lab_completed" if data["lab_completed"] else "research_lab_report_retry"
         ),
         user_id=current_user.id,
         wallet_address=current_user.wallet_address,
@@ -755,9 +769,7 @@ async def submit_research_lab_report(
     await _record_lab_event(
         analytics,
         event_type=(
-            "rl1_audit_report_accepted"
-            if data["lab_completed"]
-            else "rl1_audit_report_rejected"
+            "rl1_audit_report_accepted" if data["lab_completed"] else "rl1_audit_report_rejected"
         ),
         current_user=current_user,
         session_id=session_id,

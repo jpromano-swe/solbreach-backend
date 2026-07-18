@@ -22,6 +22,7 @@ from app.core.exceptions.domain import NotFoundError
 from app.modules.sandbox.domain.runtime import (
     SandboxAccountSnapshot,
     SandboxAccountSummary,
+    SandboxExplorerSnapshot,
     resolve_lab_file_path,
     resolve_lab_template_ref,
     SandboxRuntime,
@@ -63,13 +64,33 @@ COUNTERFEIT_VAULT_REFS = {
 LAB_ACCOUNT_MAP = {
     "treasury_vault": {"label": "Protocol Treasury", "pda": True},
     "position": {"label": "Borrow Position", "pda": True},
-    "attacker_reward_account": {"label": "Learner Reward Wallet", "pda": False, "key_role": "attacker"},
+    "attacker_reward_account": {
+        "label": "Learner Reward Wallet",
+        "pda": False,
+        "key_role": "attacker",
+    },
     "attacker_wallet": {"label": "Learner Reward Wallet", "pda": False, "key_role": "attacker"},
     "payer_wallet": {"label": "Payer Wallet", "pda": False, "key_role": "payer"},
-    "counterfeit_mint_account": {"label": "Candidate Collateral Mint", "pda": False, "key_role": "cmint"},
-    "official_mint_account": {"label": "Approved Collateral Mint", "pda": False, "key_role": "omint"},
-    "attacker_collateral_account": {"label": "Candidate Collateral Account", "pda": False, "key_role": "acollat"},
-    "official_collateral_account": {"label": "Official Collateral Account", "pda": False, "key_role": "ocollat"},
+    "counterfeit_mint_account": {
+        "label": "Candidate Collateral Mint",
+        "pda": False,
+        "key_role": "cmint",
+    },
+    "official_mint_account": {
+        "label": "Approved Collateral Mint",
+        "pda": False,
+        "key_role": "omint",
+    },
+    "attacker_collateral_account": {
+        "label": "Candidate Collateral Account",
+        "pda": False,
+        "key_role": "acollat",
+    },
+    "official_collateral_account": {
+        "label": "Official Collateral Account",
+        "pda": False,
+        "key_role": "ocollat",
+    },
     "counterfeit_vault_account": {"label": "External Vault", "pda": False, "key_role": "cvault"},
     "official_vault_account": {"label": "Official Vault", "pda": False, "key_role": "ovault"},
 }
@@ -184,7 +205,9 @@ def _positive_amount(params: dict, default: int) -> int:
     return max(amount, 0)
 
 
-def _borrow_quote(credited_collateral: int, treasury_lamports: int, borrowed_total: int) -> dict[str, int | bool]:
+def _borrow_quote(
+    credited_collateral: int, treasury_lamports: int, borrowed_total: int
+) -> dict[str, int | bool]:
     gross_max_borrow = (credited_collateral * LTV_BPS) // 10_000
     remaining_credit = max(gross_max_borrow - borrowed_total, 0)
     return {
@@ -312,7 +335,9 @@ def _derive_protocol_state(
     }
 
 
-def _snapshot_accounts(svm: LiteSVM, mat: "SessionMaterializer", refs: list[str]) -> dict[str, dict]:
+def _snapshot_accounts(
+    svm: LiteSVM, mat: "SessionMaterializer", refs: list[str]
+) -> dict[str, dict]:
     snapshots: dict[str, dict] = {}
     for ref in refs:
         pk = mat.account_pubkeys().get(ref)
@@ -345,8 +370,12 @@ def _build_account_deltas(before: dict[str, dict], after: dict[str, dict]) -> li
         current = after.get(ref, {"exists": False})
         before_lamports = int(previous.get("lamports", 0) or 0)
         after_lamports = int(current.get("lamports", 0) or 0)
-        before_amount = int(previous.get("data", {}).get("amount", previous.get("data", {}).get("credit", 0)) or 0)
-        after_amount = int(current.get("data", {}).get("amount", current.get("data", {}).get("credit", 0)) or 0)
+        before_amount = int(
+            previous.get("data", {}).get("amount", previous.get("data", {}).get("credit", 0)) or 0
+        )
+        after_amount = int(
+            current.get("data", {}).get("amount", current.get("data", {}).get("credit", 0)) or 0
+        )
         if (
             previous.get("exists") != current.get("exists")
             or before_lamports != after_lamports
@@ -435,21 +464,41 @@ class SessionMaterializer:
 
         svm.set_account(
             self.payer.pubkey(),
-            Account(lamports=10_000_000_000, data=b"", owner=SYS_PROGRAM_ID, executable=False, rent_epoch=0),
+            Account(
+                lamports=10_000_000_000,
+                data=b"",
+                owner=SYS_PROGRAM_ID,
+                executable=False,
+                rent_epoch=0,
+            ),
         )
         svm.set_account(
             self.attacker.pubkey(),
-            Account(lamports=INITIAL_REWARD_LAMPORTS, data=b"", owner=SYS_PROGRAM_ID, executable=False, rent_epoch=0),
+            Account(
+                lamports=INITIAL_REWARD_LAMPORTS,
+                data=b"",
+                owner=SYS_PROGRAM_ID,
+                executable=False,
+                rent_epoch=0,
+            ),
         )
         svm.set_account(
             self.treasury_pda,
-            Account(lamports=INITIAL_TREASURY_LAMPORTS, data=b"", owner=PROGRAM_ID, executable=False, rent_epoch=0),
+            Account(
+                lamports=INITIAL_TREASURY_LAMPORTS,
+                data=b"",
+                owner=PROGRAM_ID,
+                executable=False,
+                rent_epoch=0,
+            ),
         )
         svm.set_account(
             self.attacker_collateral_pk,
             Account(
                 lamports=1_000_000,
-                data=_spl_token_data(self.counterfeit_mint, self.attacker.pubkey(), COUNTERFEIT_COLLATERAL_START),
+                data=_spl_token_data(
+                    self.counterfeit_mint, self.attacker.pubkey(), COUNTERFEIT_COLLATERAL_START
+                ),
                 owner=TOKEN_PROGRAM_ID,
                 executable=False,
                 rent_epoch=0,
@@ -459,7 +508,9 @@ class SessionMaterializer:
             self.official_collateral_pk,
             Account(
                 lamports=1_000_000,
-                data=_spl_token_data(self.official_mint, self.attacker.pubkey(), OFFICIAL_COLLATERAL_START),
+                data=_spl_token_data(
+                    self.official_mint, self.attacker.pubkey(), OFFICIAL_COLLATERAL_START
+                ),
                 owner=TOKEN_PROGRAM_ID,
                 executable=False,
                 rent_epoch=0,
@@ -479,7 +530,9 @@ class SessionMaterializer:
             self.official_vault_pk,
             Account(
                 lamports=1_000_000,
-                data=_spl_token_data(self.official_mint, self.treasury_pda, INITIAL_TREASURY_LAMPORTS),
+                data=_spl_token_data(
+                    self.official_mint, self.treasury_pda, INITIAL_TREASURY_LAMPORTS
+                ),
                 owner=TOKEN_PROGRAM_ID,
                 executable=False,
                 rent_epoch=0,
@@ -496,7 +549,10 @@ class SessionMaterializer:
             ],
         )
         bh = svm.latest_blockhash()
-        tx = VersionedTransaction(Message.new_with_blockhash([init_ix], self.payer.pubkey(), bh), [self.payer, self.attacker])
+        tx = VersionedTransaction(
+            Message.new_with_blockhash([init_ix], self.payer.pubkey(), bh),
+            [self.payer, self.attacker],
+        )
         init_result = svm.send_transaction(tx)
         position_acc = svm.get_account(self.position_pda)
         if (
@@ -580,7 +636,9 @@ class SessionMaterializer:
             treasury_acc = svm.get_account(self.treasury_pda)
             treasury_lamports = treasury_acc.lamports if treasury_acc else 0
             reward_acc = svm.get_account(self.attacker.pubkey())
-            borrowed_total = max((reward_acc.lamports if reward_acc else 0) - INITIAL_REWARD_LAMPORTS, 0)
+            borrowed_total = max(
+                (reward_acc.lamports if reward_acc else 0) - INITIAL_REWARD_LAMPORTS, 0
+            )
             quote = _borrow_quote(credited_collateral, treasury_lamports, borrowed_total)
             requested_amount = int(params.get("amount") or quote["maxDrainAmount"])
             amount = min(requested_amount, int(quote["maxDrainAmount"]))
@@ -601,7 +659,10 @@ class SessionMaterializer:
 
         if ix:
             bh = svm.latest_blockhash()
-            tx = VersionedTransaction(Message.new_with_blockhash([ix], self.payer.pubkey(), bh), [self.payer, self.attacker])
+            tx = VersionedTransaction(
+                Message.new_with_blockhash([ix], self.payer.pubkey(), bh),
+                [self.payer, self.attacker],
+            )
             result = svm.send_transaction(tx)
             if isinstance(result, FailedTransactionMetadata):
                 if position_credit_override is None and action_type != "WITHDRAW_AGAINST_CREDIT":
@@ -635,7 +696,9 @@ class SessionMaterializer:
 
 
 class LiteSVMSandboxRuntime(SandboxRuntime):
-    def __init__(self, template_root: Path, workspace_root: Path, db_session: AsyncSession = None) -> None:
+    def __init__(
+        self, template_root: Path, workspace_root: Path, db_session: AsyncSession = None
+    ) -> None:
         self._template_root = template_root
         self._workspace_root = workspace_root
         self._db_session = db_session
@@ -661,7 +724,9 @@ class LiteSVMSandboxRuntime(SandboxRuntime):
     async def patch_file(self, session_id: str, path: str, content: str) -> None:
         pass
 
-    async def run_tests(self, session_id: str, command: str, timeout_seconds: int) -> SandboxTestRunResult:
+    async def run_tests(
+        self, session_id: str, command: str, timeout_seconds: int
+    ) -> SandboxTestRunResult:
         return SandboxTestRunResult(status="passed", exit_code=0)
 
     async def reset_session(self, session_id: str, template_ref: str) -> None:
@@ -700,34 +765,88 @@ class LiteSVMSandboxRuntime(SandboxRuntime):
         )
 
         return [
-            SandboxAccountSummary("treasury_vault", "Protocol Treasury", str(PROGRAM_ID), treasury_lamports, {
-                "availableBorrow": protocol_state["availableBorrow"],
-                "maxBorrow": protocol_state["maxBorrow"],
-            }),
-            SandboxAccountSummary("position", "Borrow Position", str(PROGRAM_ID), 0, {
-                "creditedCollateral": credited_collateral,
-                "borrowedTotal": protocol_state["borrowedTotal"],
-                "availableBorrow": protocol_state["availableBorrow"],
-                "maxBorrow": protocol_state["maxBorrow"],
-                "depositPathType": protocol_state["depositPathType"],
-                "borrowAllowed": protocol_state["borrowAllowed"],
-                "ltvBps": protocol_state["ltvBps"],
-            }),
-            SandboxAccountSummary("attacker_reward_account", "Learner Reward Wallet", str(SYS_PROGRAM_ID), reward_lamports, {
-                "borrowedTotal": protocol_state["borrowedTotal"],
-            }),
-            SandboxAccountSummary("counterfeit_mint_account", "Counterfeit Mint", str(TOKEN_PROGRAM_ID), 0, {"approved": False}),
-            SandboxAccountSummary("official_mint_account", "Official Mint", str(TOKEN_PROGRAM_ID), 0, {"approved": True}),
-            SandboxAccountSummary("attacker_collateral_account", "Candidate Collateral Account", str(TOKEN_PROGRAM_ID), _lamports(mat.attacker_collateral_pk), {
-                "tokenAmount": COUNTERFEIT_COLLATERAL_START,
-                "approved": False,
-            }),
-            SandboxAccountSummary("official_collateral_account", "Official Collateral Account", str(TOKEN_PROGRAM_ID), _lamports(mat.official_collateral_pk), {
-                "tokenAmount": OFFICIAL_COLLATERAL_START,
-                "approved": True,
-            }),
-            SandboxAccountSummary("counterfeit_vault_account", "External Vault", str(TOKEN_PROGRAM_ID), _lamports(mat.counterfeit_vault_pk), {"approved": False}),
-            SandboxAccountSummary("official_vault_account", "Official Vault", str(TOKEN_PROGRAM_ID), _lamports(mat.official_vault_pk), {"approved": True}),
+            SandboxAccountSummary(
+                "treasury_vault",
+                "Protocol Treasury",
+                str(PROGRAM_ID),
+                treasury_lamports,
+                {
+                    "availableBorrow": protocol_state["availableBorrow"],
+                    "maxBorrow": protocol_state["maxBorrow"],
+                },
+            ),
+            SandboxAccountSummary(
+                "position",
+                "Borrow Position",
+                str(PROGRAM_ID),
+                0,
+                {
+                    "creditedCollateral": credited_collateral,
+                    "borrowedTotal": protocol_state["borrowedTotal"],
+                    "availableBorrow": protocol_state["availableBorrow"],
+                    "maxBorrow": protocol_state["maxBorrow"],
+                    "depositPathType": protocol_state["depositPathType"],
+                    "borrowAllowed": protocol_state["borrowAllowed"],
+                    "ltvBps": protocol_state["ltvBps"],
+                },
+            ),
+            SandboxAccountSummary(
+                "attacker_reward_account",
+                "Learner Reward Wallet",
+                str(SYS_PROGRAM_ID),
+                reward_lamports,
+                {
+                    "borrowedTotal": protocol_state["borrowedTotal"],
+                },
+            ),
+            SandboxAccountSummary(
+                "counterfeit_mint_account",
+                "Counterfeit Mint",
+                str(TOKEN_PROGRAM_ID),
+                0,
+                {"approved": False},
+            ),
+            SandboxAccountSummary(
+                "official_mint_account",
+                "Official Mint",
+                str(TOKEN_PROGRAM_ID),
+                0,
+                {"approved": True},
+            ),
+            SandboxAccountSummary(
+                "attacker_collateral_account",
+                "Candidate Collateral Account",
+                str(TOKEN_PROGRAM_ID),
+                _lamports(mat.attacker_collateral_pk),
+                {
+                    "tokenAmount": COUNTERFEIT_COLLATERAL_START,
+                    "approved": False,
+                },
+            ),
+            SandboxAccountSummary(
+                "official_collateral_account",
+                "Official Collateral Account",
+                str(TOKEN_PROGRAM_ID),
+                _lamports(mat.official_collateral_pk),
+                {
+                    "tokenAmount": OFFICIAL_COLLATERAL_START,
+                    "approved": True,
+                },
+            ),
+            SandboxAccountSummary(
+                "counterfeit_vault_account",
+                "External Vault",
+                str(TOKEN_PROGRAM_ID),
+                _lamports(mat.counterfeit_vault_pk),
+                {"approved": False},
+            ),
+            SandboxAccountSummary(
+                "official_vault_account",
+                "Official Vault",
+                str(TOKEN_PROGRAM_ID),
+                _lamports(mat.official_vault_pk),
+                {"approved": True},
+            ),
         ]
 
     async def get_account_state(self, session_id: str, account_ref: str) -> SandboxAccountSnapshot:
@@ -824,6 +943,20 @@ class LiteSVMSandboxRuntime(SandboxRuntime):
             owner=str(acc.owner),
             lamports=acc.lamports,
             data=data,
+        )
+
+    async def get_explorer_snapshot(self, session_id: str) -> SandboxExplorerSnapshot:
+        if await self._is_yield_hijack_session(session_id):
+            return await YieldHijackRuntime(
+                self._template_root, self._db_session
+            ).get_explorer_snapshot(session_id)
+        return SandboxExplorerSnapshot(
+            session_id=session_id,
+            network={"name": "SolBreach SVM", "kind": "sandbox"},
+            program={},
+            accounts=[],
+            enabled=False,
+            reason="Explorer is not enabled for this lab.",
         )
 
     async def submit_transaction(
@@ -984,13 +1117,15 @@ class LiteSVMSandboxRuntime(SandboxRuntime):
         tx = result.scalar_one_or_none()
         return tx.logs_json if tx else []
 
-    async def verify_objective(self, session_id: str, objective_ref: str) -> SandboxVerificationResult:
+    async def verify_objective(
+        self, session_id: str, objective_ref: str
+    ) -> SandboxVerificationResult:
         if await self._is_yield_hijack_session(session_id):
             if objective_ref != YIELD_HIJACK_OBJECTIVE_REF:
                 raise NotFoundError("Sandbox objective not found")
-            return await YieldHijackRuntime(
-                self._template_root, self._db_session
-            ).verify_objective(session_id, objective_ref)
+            return await YieldHijackRuntime(self._template_root, self._db_session).verify_objective(
+                session_id, objective_ref
+            )
         mat = SessionMaterializer(self._template_root, self._db_session, session_id)
         svm = await mat.materialize()
 
@@ -1034,7 +1169,10 @@ class LiteSVMSandboxRuntime(SandboxRuntime):
                     successful_invalid_deposit = tx_model
                 elif path_type == "official":
                     successful_official_deposit = tx_model
-            if tx_model.instruction_type == "WITHDRAW_AGAINST_CREDIT" and tx_model.execution_status == "success":
+            if (
+                tx_model.instruction_type == "WITHDRAW_AGAINST_CREDIT"
+                and tx_model.execution_status == "success"
+            ):
                 successful_withdrawal = tx_model
 
         counterfeit_deposit_observed = successful_invalid_deposit is not None
@@ -1044,7 +1182,9 @@ class LiteSVMSandboxRuntime(SandboxRuntime):
             counterfeit_deposit_observed
             and int(protocol_state.get("counterfeitCollateral", 0) or 0) > 0
         )
-        treasury_drained = int(protocol_state.get("poolLiquidity", 0) or 0) < INITIAL_TREASURY_LAMPORTS
+        treasury_drained = (
+            int(protocol_state.get("poolLiquidity", 0) or 0) < INITIAL_TREASURY_LAMPORTS
+        )
         withdrawal_observed = successful_withdrawal is not None
         exploit_provenance_confirmed = (
             successful_invalid_deposit is not None
@@ -1059,9 +1199,7 @@ class LiteSVMSandboxRuntime(SandboxRuntime):
         available_borrow = int(protocol_state["availableBorrow"])
         max_drain_satisfied = bool(protocol_state.get("maxDrainSatisfied"))
         legitimate_official_borrow_only = (
-            official_path_used
-            and successful_invalid_deposit is None
-            and withdrawal_observed
+            official_path_used and successful_invalid_deposit is None and withdrawal_observed
         )
 
         passed = all(
@@ -1079,7 +1217,9 @@ class LiteSVMSandboxRuntime(SandboxRuntime):
         )
         verified_evidence_refs = []
         if successful_invalid_deposit is not None:
-            verified_evidence_refs.append(f"transaction:{successful_invalid_deposit.transaction_ref}")
+            verified_evidence_refs.append(
+                f"transaction:{successful_invalid_deposit.transaction_ref}"
+            )
         if successful_withdrawal is not None:
             verified_evidence_refs.append(f"transaction:{successful_withdrawal.transaction_ref}")
         if treasury_drained:
@@ -1099,9 +1239,7 @@ class LiteSVMSandboxRuntime(SandboxRuntime):
                 for tx_model in tx_models
             ],
             "accountDeltas": [
-                delta
-                for tx_model in tx_models
-                for delta in (tx_model.account_deltas_json or [])
+                delta for tx_model in tx_models for delta in (tx_model.account_deltas_json or [])
             ],
             "runtimeLogs": [
                 {
@@ -1140,7 +1278,9 @@ class LiteSVMSandboxRuntime(SandboxRuntime):
             if not counterfeit_deposit_observed:
                 failure_reason = "No invalid collateral-to-vault deposit has been observed."
             elif legitimate_official_borrow_only:
-                failure_reason = "Observed borrow came from the official collateral path, not the exploit path."
+                failure_reason = (
+                    "Observed borrow came from the official collateral path, not the exploit path."
+                )
             elif not withdrawal_observed:
                 failure_reason = "No treasury withdrawal against invalid credit has been observed."
             elif not real_protocol_treasury_value_decreased:
@@ -1162,7 +1302,9 @@ class LiteSVMSandboxRuntime(SandboxRuntime):
                 f"Exploit drain matched the backend max-borrow quote ({max_borrow}).",
             ]
             if passed
-            else [failure_reason or "No verified unauthorized treasury withdrawal has been observed."]
+            else [
+                failure_reason or "No verified unauthorized treasury withdrawal has been observed."
+            ]
         )
 
         return SandboxVerificationResult(

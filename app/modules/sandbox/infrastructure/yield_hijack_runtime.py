@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
@@ -18,6 +19,7 @@ from app.modules.labs.infrastructure.database.models import ResearchLabTransacti
 from app.modules.sandbox.domain.runtime import (
     SandboxAccountSnapshot,
     SandboxAccountSummary,
+    SandboxExplorerSnapshot,
     SandboxTransactionResult,
     SandboxVerificationResult,
     resolve_lab_file_path,
@@ -33,6 +35,7 @@ ATTACKER_INITIAL_REWARD = 0
 STAKE_VAULT_INITIAL_BALANCE = 50_000
 REWARD_VAULT_INITIAL_BALANCE = 500_000
 ADVERTISED_APY_BPS = 250_000
+TOKEN_PROGRAM_ID = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
 
 YIELD_ACCOUNT_LABELS = {
     "pool_config": "Pool Configuration",
@@ -140,7 +143,9 @@ class YieldHijackMaterializer:
             *await self.successful_transactions(),
             *(extra_successful or []),
         ]
-        return self.state_from_successful(tx_models, failed_transactions=await self._failed_transactions())
+        return self.state_from_successful(
+            tx_models, failed_transactions=await self._failed_transactions()
+        )
 
     def state_from_successful(
         self,
@@ -281,7 +286,9 @@ class YieldHijackRuntime:
         state = await mat.state()
         pubkeys = mat.account_pubkeys()
         return [
-            _summary("pool_config", pubkeys["pool_config"], {"advertisedApyBps": ADVERTISED_APY_BPS}),
+            _summary(
+                "pool_config", pubkeys["pool_config"], {"advertisedApyBps": ADVERTISED_APY_BPS}
+            ),
             _summary("pool_authority", pubkeys["pool_authority"], {"pool": str(mat.pool_config)}),
             _summary("stake_mint", pubkeys["stake_mint"], {"symbol": "STAKE"}),
             _summary("reward_mint", pubkeys["reward_mint"], {"symbol": "REWARD"}),
@@ -299,12 +306,18 @@ class YieldHijackRuntime:
             _summary(
                 "attacker_stake_account",
                 pubkeys["attacker_stake_account"],
-                {"tokenAmount": state.attacker["stakeBalance"], "owner": str(mat.attacker.pubkey())},
+                {
+                    "tokenAmount": state.attacker["stakeBalance"],
+                    "owner": str(mat.attacker.pubkey()),
+                },
             ),
             _summary(
                 "attacker_reward_account",
                 pubkeys["attacker_reward_account"],
-                {"tokenAmount": state.attacker["rewardBalance"], "owner": str(mat.attacker.pubkey())},
+                {
+                    "tokenAmount": state.attacker["rewardBalance"],
+                    "owner": str(mat.attacker.pubkey()),
+                },
             ),
             _summary(
                 "victim_stake_account",
@@ -333,6 +346,43 @@ class YieldHijackRuntime:
             data=data,
         )
 
+    async def get_explorer_snapshot(self, session_id: str) -> SandboxExplorerSnapshot:
+        mat = YieldHijackMaterializer(self._template_root, self._db_session, session_id)
+        state = await mat.state()
+        pubkeys = mat.account_pubkeys()
+        program_address = str(mat.program_id)
+        idl = self._session_idl(program_address)
+        return SandboxExplorerSnapshot(
+            session_id=session_id,
+            network={"name": "SolBreach SVM", "kind": "sandbox"},
+            program={
+                "ref": "yield_hijack",
+                "address": program_address,
+                "name": "yield_hijack",
+                "version": "1.0.0",
+                "interfaceSource": "lab_idl",
+                "idl": idl,
+            },
+            accounts=[
+                _explorer_account(ref, pubkeys[ref], state, mat)
+                for ref in [
+                    "pool_config",
+                    "pool_authority",
+                    "stake_mint",
+                    "reward_mint",
+                    "stake_vault",
+                    "reward_vault",
+                    "stake_position",
+                    "attacker_stake_account",
+                    "attacker_reward_account",
+                    "victim_stake_account",
+                    "victim_reward_account",
+                ]
+            ],
+            reward_candidates=_reward_candidates(state),
+            total_rewards_paid=sum(item["amount"] for item in state.successful_claims),
+        )
+
     async def submit_transaction(
         self, session_id: str, action_type: str, parameters: dict
     ) -> SandboxTransactionResult:
@@ -359,7 +409,9 @@ class YieldHijackRuntime:
             extra_successful.append(
                 SimpleNamespace(
                     transaction_ref=f"tx_preview_{uuid4().hex[:8]}",
-                    sequence_number=len(before.successful_stakes) + len(before.successful_claims) + 1,
+                    sequence_number=len(before.successful_stakes)
+                    + len(before.successful_claims)
+                    + 1,
                     execution_status="success",
                     instruction_type=action,
                     parameters_json=params,
@@ -380,13 +432,17 @@ class YieldHijackRuntime:
             user_facing_evidence=[
                 {
                     "type": "transaction_result" if success else "rejected_transaction",
-                    "summary": "Transaction submitted." if success else _failure_summary(failure_code),
+                    "summary": "Transaction submitted."
+                    if success
+                    else _failure_summary(failure_code),
                     "errorCode": failure_code,
                 }
             ],
         )
 
-    async def verify_objective(self, session_id: str, objective_ref: str) -> SandboxVerificationResult:
+    async def verify_objective(
+        self, session_id: str, objective_ref: str
+    ) -> SandboxVerificationResult:
         mat = YieldHijackMaterializer(self._template_root, self._db_session, session_id)
         state = await mat.state()
         tx_models = await mat.all_transactions()
@@ -415,7 +471,8 @@ class YieldHijackRuntime:
             == state.derivations["attacker_position"]["address"]
         )
         checks = {
-            "baselinePositionOwnerWasVictim": state.position["baselineOwner"] == str(mat.victim.pubkey()),
+            "baselinePositionOwnerWasVictim": state.position["baselineOwner"]
+            == str(mat.victim.pubkey()),
             "currentPositionOwnerIsAttacker": state.position["owner"] == str(mat.attacker.pubkey()),
             "attackerStakeObserved": successful_stake is not None,
             "victimStakePreserved": state.position["stakedAmount"]
@@ -497,6 +554,13 @@ class YieldHijackRuntime:
             ),
         )
 
+    def _session_idl(self, program_address: str) -> dict:
+        idl_path = self._template_root / YIELD_HIJACK_TEMPLATE_REF / "idl" / "yield_hijack.json"
+        idl = json.loads(idl_path.read_text(encoding="utf-8"))
+        idl["address"] = program_address
+        idl.setdefault("metadata", {})["address"] = program_address
+        return idl
+
 
 def _summary(ref: str, pubkey: Pubkey, data: dict) -> SandboxAccountSummary:
     return SandboxAccountSummary(
@@ -506,6 +570,56 @@ def _summary(ref: str, pubkey: Pubkey, data: dict) -> SandboxAccountSummary:
         lamports=0,
         data=data,
     )
+
+
+def _explorer_account(
+    ref: str, pubkey: Pubkey, state: YieldHijackState, mat: YieldHijackMaterializer
+) -> dict:
+    program_address = str(mat.program_id)
+    return {
+        "ref": ref,
+        "address": str(pubkey),
+        "label": YIELD_ACCOUNT_LABELS.get(ref, ref),
+        "ownerProgram": _owner_program(ref, program_address),
+        "accountType": _account_type(ref),
+        "lamports": 0,
+        "data": _account_data(ref, state, mat),
+    }
+
+
+def _owner_program(ref: str, program_address: str) -> str:
+    if ref in {"pool_config", "pool_authority", "stake_position"}:
+        return program_address
+    return TOKEN_PROGRAM_ID
+
+
+def _account_type(ref: str) -> str:
+    return {
+        "pool_config": "PoolConfig",
+        "pool_authority": "ProgramDerivedAddress",
+        "stake_mint": "Mint",
+        "reward_mint": "Mint",
+        "stake_vault": "TokenAccount",
+        "reward_vault": "TokenAccount",
+        "stake_position": "StakePosition",
+        "attacker_stake_account": "TokenAccount",
+        "attacker_reward_account": "TokenAccount",
+        "victim_stake_account": "TokenAccount",
+        "victim_reward_account": "TokenAccount",
+    }.get(ref, "Account")
+
+
+def _reward_candidates(state: YieldHijackState) -> list[dict]:
+    pending_rewards = int(state.position["pendingRewards"])
+    if pending_rewards <= 0:
+        return []
+    return [
+        {
+            "walletAddress": state.position["baselineOwner"],
+            "positionAddress": state.position["address"],
+            "pendingRewards": pending_rewards,
+        }
+    ]
 
 
 def _account_data(ref: str, state: YieldHijackState, mat: YieldHijackMaterializer) -> dict:
@@ -534,12 +648,19 @@ def _account_data(ref: str, state: YieldHijackState, mat: YieldHijackMaterialize
     return {}
 
 
-def _execute_stake(state: YieldHijackState, params: dict) -> tuple[bool, str | None, list[str], dict]:
+def _execute_stake(
+    state: YieldHijackState, params: dict
+) -> tuple[bool, str | None, list[str], dict]:
     amount = int(params.get("amount") or 0)
     if amount <= 0:
         return False, "INVALID_AMOUNT", ["Stake amount must be positive."], params
     if amount > state.attacker["stakeBalance"]:
-        return False, "INSUFFICIENT_STAKE_BALANCE", ["Stake amount exceeds attacker balance."], params
+        return (
+            False,
+            "INSUFFICIENT_STAKE_BALANCE",
+            ["Stake amount exceeds attacker balance."],
+            params,
+        )
     required_refs = {
         "source_account_ref": "attacker_stake_account",
         "stake_vault_ref": "stake_vault",
@@ -560,7 +681,9 @@ def _execute_stake(state: YieldHijackState, params: dict) -> tuple[bool, str | N
     )
 
 
-def _execute_claim(state: YieldHijackState, params: dict) -> tuple[bool, str | None, list[str], dict]:
+def _execute_claim(
+    state: YieldHijackState, params: dict
+) -> tuple[bool, str | None, list[str], dict]:
     required_refs = {
         "position_account_ref": "stake_position",
         "reward_vault_ref": "reward_vault",
@@ -569,8 +692,23 @@ def _execute_claim(state: YieldHijackState, params: dict) -> tuple[bool, str | N
     ref_error = _validate_refs(params, required_refs)
     if ref_error is not None:
         return False, ref_error, ["Invalid session account reference."], params
+    target_wallet = params.get("target_wallet_address")
+    if not target_wallet:
+        return False, "TARGET_WALLET_REQUIRED", ["Target wallet address is required."], params
+    if target_wallet != state.position["baselineOwner"]:
+        return (
+            False,
+            "INVALID_TARGET_WALLET",
+            ["Target wallet does not match reward candidate."],
+            params,
+        )
     if state.position["owner"] != state.attacker["wallet"]:
-        return False, "INVALID_POSITION_OWNER", ["Claim rejected: signer does not own position."], params
+        return (
+            False,
+            "INVALID_POSITION_OWNER",
+            ["Claim rejected: signer does not own position."],
+            params,
+        )
     amount = int(state.position["pendingRewards"])
     if amount <= 0:
         return False, "NO_REWARDS_AVAILABLE", ["Claim rejected: no rewards available."], params
@@ -591,6 +729,8 @@ def _failure_summary(code: str | None) -> str:
         "INVALID_AMOUNT": "Stake amount must be greater than zero.",
         "INSUFFICIENT_STAKE_BALANCE": "Stake amount exceeds the attacker stake balance.",
         "INVALID_ACCOUNT_REF": "One or more account refs do not belong to this session action.",
+        "TARGET_WALLET_REQUIRED": "Target wallet address is required.",
+        "INVALID_TARGET_WALLET": "Target wallet does not match the reward candidate.",
         "INVALID_POSITION_OWNER": "The attacker does not own the staking position yet.",
         "NO_REWARDS_AVAILABLE": "No rewards are available to claim.",
         "UNSUPPORTED_ACTION": "Unsupported sandbox action.",
@@ -599,10 +739,30 @@ def _failure_summary(code: str | None) -> str:
 
 def _build_yield_deltas(before: YieldHijackState, after: YieldHijackState) -> list[dict]:
     pairs = [
-        ("stake_position", "stakedAmount", before.position["stakedAmount"], after.position["stakedAmount"]),
-        ("stake_position", "pendingRewards", before.position["pendingRewards"], after.position["pendingRewards"]),
-        ("stake_vault", "tokenAmount", before.pool["stakeVaultBalance"], after.pool["stakeVaultBalance"]),
-        ("reward_vault", "tokenAmount", before.pool["rewardVaultBalance"], after.pool["rewardVaultBalance"]),
+        (
+            "stake_position",
+            "stakedAmount",
+            before.position["stakedAmount"],
+            after.position["stakedAmount"],
+        ),
+        (
+            "stake_position",
+            "pendingRewards",
+            before.position["pendingRewards"],
+            after.position["pendingRewards"],
+        ),
+        (
+            "stake_vault",
+            "tokenAmount",
+            before.pool["stakeVaultBalance"],
+            after.pool["stakeVaultBalance"],
+        ),
+        (
+            "reward_vault",
+            "tokenAmount",
+            before.pool["rewardVaultBalance"],
+            after.pool["rewardVaultBalance"],
+        ),
         (
             "attacker_stake_account",
             "tokenAmount",

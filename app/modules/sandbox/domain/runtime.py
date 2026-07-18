@@ -43,6 +43,18 @@ class SandboxAccountSnapshot:
 
 
 @dataclass(slots=True)
+class SandboxExplorerSnapshot:
+    session_id: str
+    network: dict
+    program: dict
+    accounts: list[dict]
+    reward_candidates: list[dict] = field(default_factory=list)
+    total_rewards_paid: int = 0
+    enabled: bool = True
+    reason: str | None = None
+
+
+@dataclass(slots=True)
 class SandboxTransactionResult:
     transaction_ref: str
     instruction_type: str
@@ -97,6 +109,8 @@ class SandboxRuntime(Protocol):
     async def get_account_state(
         self, session_id: str, account_ref: str
     ) -> SandboxAccountSnapshot: ...
+
+    async def get_explorer_snapshot(self, session_id: str) -> SandboxExplorerSnapshot: ...
 
     async def submit_transaction(
         self, session_id: str, action_type: str, parameters: dict

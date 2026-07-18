@@ -15,6 +15,7 @@ from app.modules.labs.infrastructure.database.models import ResearchLabSessionMo
 from app.modules.sandbox.domain.runtime import (
     SandboxAccountSnapshot,
     SandboxAccountSummary,
+    SandboxExplorerSnapshot,
     SandboxRuntime,
     SandboxTerminalEvent,
     SandboxTestResult,
@@ -32,9 +33,7 @@ from app.modules.sandbox.infrastructure.yield_hijack_runtime import (
 
 TEST_LABELS = {
     "normal_deposit_accepts_normal_oracle_input": "test deposit accepts normal oracle input",
-    "overflow_shaped_oracle_input_is_rejected": (
-        "test overflow-shaped oracle input is rejected"
-    ),
+    "overflow_shaped_oracle_input_is_rejected": ("test overflow-shaped oracle input is rejected"),
 }
 OFFICIAL_COLLATERAL_REFS = {"official_collateral", "official_collateral_account"}
 COUNTERFEIT_COLLATERAL_REFS = {
@@ -116,9 +115,7 @@ class LocalProcessSandboxRuntime(SandboxRuntime):
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            stdout, stderr = await asyncio.wait_for(
-                process.communicate(), timeout=timeout_seconds
-            )
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout_seconds)
         except TimeoutError:
             return SandboxTestRunResult(
                 status="timeout",
@@ -167,13 +164,9 @@ class LocalProcessSandboxRuntime(SandboxRuntime):
             if account["visible"]
         ]
 
-    async def get_account_state(
-        self, session_id: str, account_ref: str
-    ) -> SandboxAccountSnapshot:
+    async def get_account_state(self, session_id: str, account_ref: str) -> SandboxAccountSnapshot:
         if await self._is_yield_hijack_session(session_id):
-            return await self._yield_hijack_runtime().get_account_state(
-                session_id, account_ref
-            )
+            return await self._yield_hijack_runtime().get_account_state(session_id, account_ref)
         state = self._read_state(session_id)
         storage_ref = "attacker_position" if account_ref == "position" else account_ref
         account = state["accounts"].get(storage_ref)
@@ -190,6 +183,18 @@ class LocalProcessSandboxRuntime(SandboxRuntime):
             owner=account["owner"],
             lamports=account["lamports"],
             data=data,
+        )
+
+    async def get_explorer_snapshot(self, session_id: str) -> SandboxExplorerSnapshot:
+        if await self._is_yield_hijack_session(session_id):
+            return await self._yield_hijack_runtime().get_explorer_snapshot(session_id)
+        return SandboxExplorerSnapshot(
+            session_id=session_id,
+            network={"name": "SolBreach SVM", "kind": "sandbox"},
+            program={},
+            accounts=[],
+            enabled=False,
+            reason="Explorer is not enabled for this lab.",
         )
 
     async def submit_transaction(
@@ -258,9 +263,7 @@ class LocalProcessSandboxRuntime(SandboxRuntime):
         if await self._is_yield_hijack_session(session_id):
             if objective_ref != YIELD_HIJACK_OBJECTIVE_REF:
                 raise NotFoundError("Sandbox objective not found")
-            return await self._yield_hijack_runtime().verify_objective(
-                session_id, objective_ref
-            )
+            return await self._yield_hijack_runtime().verify_objective(session_id, objective_ref)
         state = self._read_state(session_id)
         if objective_ref != "RL1_ACCOUNT_SUBSTITUTION_IMPACT":
             raise NotFoundError("Sandbox objective not found")
@@ -329,7 +332,8 @@ class LocalProcessSandboxRuntime(SandboxRuntime):
                     successful_exploit_deposit is not None and position["illegitimate_credit"] > 0
                 ),
                 "withdrawOrBorrowAgainstInvalidCreditObserved": successful_withdrawal is not None,
-                "realProtocolTreasuryValueDecreased": treasury["lamports"] < state["initial_treasury_lamports"],
+                "realProtocolTreasuryValueDecreased": treasury["lamports"]
+                < state["initial_treasury_lamports"],
                 "exploitProvenanceConfirmed": (
                     successful_exploit_deposit is not None and successful_withdrawal is not None
                 ),
@@ -362,8 +366,14 @@ class LocalProcessSandboxRuntime(SandboxRuntime):
             passed=passed,
             evidence=evidence,
             verified_evidence_refs=(
-                [f"transaction:{successful_exploit_deposit['transaction_ref']}", f"transaction:{successful_withdrawal['transaction_ref']}", "account:treasury_vault"]
-                if passed and successful_exploit_deposit is not None and successful_withdrawal is not None
+                [
+                    f"transaction:{successful_exploit_deposit['transaction_ref']}",
+                    f"transaction:{successful_withdrawal['transaction_ref']}",
+                    "account:treasury_vault",
+                ]
+                if passed
+                and successful_exploit_deposit is not None
+                and successful_withdrawal is not None
                 else []
             ),
             failure_reason=failure_reason,
@@ -418,9 +428,7 @@ class LocalProcessSandboxRuntime(SandboxRuntime):
 
 def _terminal_events(stream: str, text: str) -> list[SandboxTerminalEvent]:
     return [
-        SandboxTerminalEvent(stream=stream, line=line)
-        for line in text.splitlines()
-        if line.strip()
+        SandboxTerminalEvent(stream=stream, line=line) for line in text.splitlines() if line.strip()
     ]
 
 
@@ -604,17 +612,26 @@ def _deposit_collateral(
                 f"Program log: credited position with {amount} collateral units.",
             ]
         )
-        return "success", logs, [
-            {"type": "transaction_result", "summary": "Counterfeit collateral was accepted and credited."}
-        ]
+        return (
+            "success",
+            logs,
+            [
+                {
+                    "type": "transaction_result",
+                    "summary": "Counterfeit collateral was accepted and credited.",
+                }
+            ],
+        )
 
     if collateral_ref in OFFICIAL_COLLATERAL_REFS and vault_ref in OFFICIAL_VAULT_REFS:
         amount = _positive_amount(parameters, 0)
         if amount <= 0:
             logs.extend(["Collateral account rejected: deposit amount must be positive."])
-            return "failure", logs, [
-                {"type": "rejected_transaction", "summary": "Deposit amount must be positive."}
-            ]
+            return (
+                "failure",
+                logs,
+                [{"type": "rejected_transaction", "summary": "Deposit amount must be positive."}],
+            )
         position["data"]["credited_collateral"] += amount
         position["data"]["official_collateral"] += amount
         position["data"]["has_official_deposit"] = True
@@ -626,14 +643,23 @@ def _deposit_collateral(
                 f"Program log: credited position with {amount} collateral units.",
             ]
         )
-        return "success", logs, [
-            {"type": "transaction_result", "summary": "Official collateral was accepted and credited."}
-        ]
+        return (
+            "success",
+            logs,
+            [
+                {
+                    "type": "transaction_result",
+                    "summary": "Official collateral was accepted and credited.",
+                }
+            ],
+        )
 
     logs.extend(["Collateral account rejected: account ref not found in this session."])
-    return "failure", logs, [
-        {"type": "rejected_transaction", "summary": "Unknown or invalid action parameters."}
-    ]
+    return (
+        "failure",
+        logs,
+        [{"type": "rejected_transaction", "summary": "Unknown or invalid action parameters."}],
+    )
 
 
 def _withdraw_treasury_credit(state: dict, parameters: dict) -> tuple[str, list[str], list]:
@@ -645,12 +671,16 @@ def _withdraw_treasury_credit(state: dict, parameters: dict) -> tuple[str, list[
     amount = min(requested_amount, max_drain)
     if max_drain <= 0 or amount <= 0:
         logs.append("Program log: withdrawal rejected because no position credit exists.")
-        return "failure", logs, [
-            {
-                "type": "rejected_transaction",
-                "summary": "Borrow request exceeds the currently available borrow limit.",
-            }
-        ]
+        return (
+            "failure",
+            logs,
+            [
+                {
+                    "type": "rejected_transaction",
+                    "summary": "Borrow request exceeds the currently available borrow limit.",
+                }
+            ],
+        )
 
     treasury = state["accounts"]["treasury_vault"]
     reward = state["accounts"]["attacker_reward_account"]
@@ -664,9 +694,16 @@ def _withdraw_treasury_credit(state: dict, parameters: dict) -> tuple[str, list[
             f"Program log: transferred {amount} lamports to attacker reward account.",
         ]
     )
-    return "success", logs, [
-        {"type": "transaction_result", "summary": "Treasury value moved into the attacker reward account."}
-    ]
+    return (
+        "success",
+        logs,
+        [
+            {
+                "type": "transaction_result",
+                "summary": "Treasury value moved into the attacker reward account.",
+            }
+        ],
+    )
 
 
 def _local_protocol_state(state: dict, rejection: dict | None = None) -> dict:
