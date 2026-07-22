@@ -33,6 +33,8 @@ VICTIM_STAKED_AMOUNT = 50_000
 VICTIM_PENDING_REWARDS = 12_500
 ATTACKER_INITIAL_STAKE = 100
 ATTACKER_INITIAL_REWARD = 0
+ATTACKER_POSITION_STAKED_AMOUNT = 1_000
+ATTACKER_PENDING_REWARDS = 250
 STAKE_VAULT_INITIAL_BALANCE = 50_000
 REWARD_VAULT_INITIAL_BALANCE = 500_000
 ADVERTISED_APY_BPS = 250_000
@@ -162,6 +164,8 @@ class YieldHijackMaterializer:
         pending_rewards = VICTIM_PENDING_REWARDS
         attacker_stake_balance = ATTACKER_INITIAL_STAKE
         attacker_reward_balance = ATTACKER_INITIAL_REWARD
+        attacker_position_staked_amount = ATTACKER_POSITION_STAKED_AMOUNT
+        attacker_pending_rewards = ATTACKER_PENDING_REWARDS
         stake_vault_balance = STAKE_VAULT_INITIAL_BALANCE
         reward_vault_balance = REWARD_VAULT_INITIAL_BALANCE
         successful_stakes: list[dict] = []
@@ -177,6 +181,7 @@ class YieldHijackMaterializer:
                 position_owner = str(self.attacker.pubkey())
                 staked_amount += amount
                 attacker_stake_balance = max(attacker_stake_balance - amount, 0)
+                attacker_position_staked_amount += amount
                 stake_vault_balance += amount
                 successful_stakes.append(
                     {
@@ -191,7 +196,11 @@ class YieldHijackMaterializer:
                 amount = int(params.get("claimed_amount") or 0)
                 if amount <= 0:
                     continue
-                pending_rewards = max(pending_rewards - amount, 0)
+                claim_scope = _claim_scope(params, str(self.attacker.pubkey()))
+                if claim_scope == "own":
+                    attacker_pending_rewards = max(attacker_pending_rewards - amount, 0)
+                else:
+                    pending_rewards = max(pending_rewards - amount, 0)
                 attacker_reward_balance += amount
                 reward_vault_balance = max(reward_vault_balance - amount, 0)
                 successful_claims.append(
@@ -199,6 +208,8 @@ class YieldHijackMaterializer:
                         "transactionRef": tx_model.transaction_ref,
                         "sequenceNumber": tx_model.sequence_number,
                         "amount": amount,
+                        "claimScope": claim_scope,
+                        "targetWallet": params.get("target_wallet_address"),
                     }
                 )
 
@@ -229,8 +240,12 @@ class YieldHijackMaterializer:
             "wallet": str(self.attacker.pubkey()),
             "stakeBalance": attacker_stake_balance,
             "rewardBalance": attacker_reward_balance,
+            "positionStakedAmount": attacker_position_staked_amount,
+            "pendingRewards": attacker_pending_rewards,
             "baselineStakeBalance": ATTACKER_INITIAL_STAKE,
             "baselineRewardBalance": ATTACKER_INITIAL_REWARD,
+            "baselinePositionStakedAmount": ATTACKER_POSITION_STAKED_AMOUNT,
+            "baselinePendingRewards": ATTACKER_PENDING_REWARDS,
         }
         victim = {
             "wallet": str(self.victim.pubkey()),
@@ -330,6 +345,7 @@ class YieldHijackRuntime:
                 pubkeys["attacker_reward_account"],
                 {
                     "tokenAmount": state.attacker["rewardBalance"],
+                    "claimableRewards": state.attacker["pendingRewards"],
                     "owner": str(mat.attacker.pubkey()),
                 },
             ),
@@ -481,11 +497,18 @@ class YieldHijackRuntime:
                 and tx.instruction_type == "CLAIM_REWARDS"
                 and (tx.parameters_json or {}).get("instruction_name")
                 == CANONICAL_CLAIM_INSTRUCTION
+                and _claim_scope(tx.parameters_json or {}, str(mat.attacker.pubkey())) == "exploit"
             ),
             None,
         )
         attacker_staked = sum(item["amount"] for item in state.successful_stakes)
-        rewards_claimed = sum(item["amount"] for item in state.successful_claims)
+        rewards_claimed = sum(
+            item["amount"] for item in state.successful_claims if item["claimScope"] == "exploit"
+        )
+        own_rewards_claimed = sum(
+            item["amount"] for item in state.successful_claims if item["claimScope"] == "own"
+        )
+        total_rewards_claimed = rewards_claimed + own_rewards_claimed
         attacker_reward_delta = state.attacker["rewardBalance"] - ATTACKER_INITIAL_REWARD
         reward_vault_delta = state.pool["rewardVaultBalance"] - REWARD_VAULT_INITIAL_BALANCE
         derivation_collision = (
@@ -500,9 +523,9 @@ class YieldHijackRuntime:
             "victimStakePreserved": state.position["stakedAmount"]
             == VICTIM_STAKED_AMOUNT + attacker_staked,
             "rewardClaimObserved": successful_claim is not None,
-            "attackerRewardsIncreased": attacker_reward_delta > 0,
+            "attackerRewardsIncreased": rewards_claimed > 0,
             "rewardVaultDecreased": reward_vault_delta < 0,
-            "rewardDeltaMatches": attacker_reward_delta == -reward_vault_delta,
+            "rewardDeltaMatches": total_rewards_claimed == -reward_vault_delta,
             "claimedPreExistingRewards": rewards_claimed == VICTIM_PENDING_REWARDS,
             "pendingRewardsZero": state.position["pendingRewards"] == 0,
             "positionDerivationCollision": derivation_collision,
@@ -535,6 +558,10 @@ class YieldHijackRuntime:
                 "attackerStaked": attacker_staked,
                 "rewards_claimed": rewards_claimed,
                 "rewardsClaimed": rewards_claimed,
+                "own_rewards_claimed": own_rewards_claimed,
+                "ownRewardsClaimed": own_rewards_claimed,
+                "total_rewards_claimed": attacker_reward_delta,
+                "totalRewardsClaimed": attacker_reward_delta,
                 "position_owner_before": state.position["baselineOwner"],
                 "positionOwnerBefore": state.position["baselineOwner"],
                 "position_owner_after": state.position["owner"],
@@ -662,7 +689,11 @@ def _account_data(ref: str, state: YieldHijackState, mat: YieldHijackMaterialize
     if ref == "attacker_stake_account":
         return {"amount": state.attacker["stakeBalance"], "owner": str(mat.attacker.pubkey())}
     if ref == "attacker_reward_account":
-        return {"amount": state.attacker["rewardBalance"], "owner": str(mat.attacker.pubkey())}
+        return {
+            "amount": state.attacker["rewardBalance"],
+            "claimableRewards": state.attacker["pendingRewards"],
+            "owner": str(mat.attacker.pubkey()),
+        }
     if ref == "victim_stake_account":
         return {"amount": state.victim["stakeBalance"], "owner": str(mat.victim.pubkey())}
     if ref == "victim_reward_account":
@@ -736,25 +767,46 @@ def _execute_claim(
     target_wallet = params.get("target_wallet_address")
     if not target_wallet:
         return False, "TARGET_WALLET_REQUIRED", ["Target wallet address is required."], params
-    if target_wallet != state.position["baselineOwner"]:
+    own_claim = target_wallet == state.attacker["wallet"]
+    exploit_claim = target_wallet == state.position["baselineOwner"]
+    if not own_claim and not exploit_claim:
         return (
             False,
             "INVALID_TARGET_WALLET",
             ["Target wallet does not match reward candidate."],
             params,
         )
-    if state.position["owner"] != state.attacker["wallet"]:
+    if exploit_claim and state.position["owner"] != state.attacker["wallet"]:
         return (
             False,
             "INVALID_POSITION_OWNER",
             ["Claim rejected: signer does not own position."],
             params,
         )
-    amount = int(state.position["pendingRewards"])
+    amount = int(
+        state.attacker["pendingRewards"] if own_claim else state.position["pendingRewards"]
+    )
     if amount <= 0:
         return False, "NO_REWARDS_AVAILABLE", ["Claim rejected: no rewards available."], params
     params["claimed_amount"] = amount
-    return True, None, ["Pending rewards claimed by current position owner."], params
+    params["claim_scope"] = "own" if own_claim else "exploit"
+    return (
+        True,
+        None,
+        [
+            "Wallet rewards claimed from the learner position."
+            if own_claim
+            else "Pending rewards claimed by current position owner."
+        ],
+        params,
+    )
+
+
+def _claim_scope(params: dict, attacker_wallet: str) -> str:
+    stored_scope = params.get("claim_scope")
+    if stored_scope in {"own", "exploit"}:
+        return stored_scope
+    return "own" if params.get("target_wallet_address") == attacker_wallet else "exploit"
 
 
 def _validate_refs(params: dict, expected: dict[str, str]) -> str | None:
@@ -818,6 +870,12 @@ def _build_yield_deltas(before: YieldHijackState, after: YieldHijackState) -> li
             before.attacker["rewardBalance"],
             after.attacker["rewardBalance"],
         ),
+        (
+            "attacker_reward_account",
+            "claimableRewards",
+            before.attacker["pendingRewards"],
+            after.attacker["pendingRewards"],
+        ),
     ]
     deltas = []
     for ref, field, old, new in pairs:
@@ -858,6 +916,12 @@ def _protocol_state(state: YieldHijackState) -> dict:
         "failedTransactions": state.failed_transactions,
         "attackerStakedTotal": sum(item["amount"] for item in state.successful_stakes),
         "rewardsClaimedTotal": sum(item["amount"] for item in state.successful_claims),
+        "ownRewardsClaimedTotal": sum(
+            item["amount"] for item in state.successful_claims if item["claimScope"] == "own"
+        ),
+        "exploitRewardsClaimedTotal": sum(
+            item["amount"] for item in state.successful_claims if item["claimScope"] == "exploit"
+        ),
         "totalRewardsPaid": state.pool["totalRewardsPaid"],
         "positionDerivationCollision": (
             state.derivations["victim_position"]["address"]

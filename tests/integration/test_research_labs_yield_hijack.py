@@ -178,6 +178,8 @@ async def test_rl2_explorer_snapshot_contract(seeded_client: AsyncClient) -> Non
     assert accounts_by_ref["stake_position"]["ownerProgram"] == program_address
     assert accounts_by_ref["stake_position"]["accountType"] == "StakePosition"
     assert accounts_by_ref["stake_position"]["data"]["pendingRewards"] == 12_500
+    assert accounts_by_ref["attacker_reward_account"]["data"]["amount"] == 0
+    assert accounts_by_ref["attacker_reward_account"]["data"]["claimableRewards"] == 250
     assert accounts_by_ref["reward_mint"]["data"]["symbol"] == "USDC"
     assert explorer["rewardCandidates"] == [
         {
@@ -246,6 +248,48 @@ async def test_rl2_stake_claim_and_verify_flow(seeded_client: AsyncClient) -> No
     ).json()["data"]
     victim_wallet = initial_explorer["rewardCandidates"][0]["walletAddress"]
     initial_candidate = initial_explorer["rewardCandidates"][0]
+    attacker_wallet = next(
+        account
+        for account in initial_explorer["accounts"]
+        if account["ref"] == "attacker_reward_account"
+    )["data"]["owner"]
+
+    own_claim = await _claim(seeded_client, headers, session_id, attacker_wallet)
+    assert own_claim.status_code == 200
+    own_claim_data = own_claim.json()["data"]
+    assert own_claim_data["executionStatus"] == "success"
+    assert own_claim_data["parameters"]["claim_scope"] == "own"
+    assert own_claim_data["parameters"]["claimed_amount"] == 250
+    own_claim_state = own_claim_data["protocolState"]
+    assert own_claim_state["attacker"]["pendingRewards"] == 0
+    assert own_claim_state["attacker"]["rewardBalance"] == 250
+    assert own_claim_state["position"]["pendingRewards"] == 12_500
+    assert own_claim_state["ownRewardsClaimedTotal"] == 250
+    assert own_claim_state["exploitRewardsClaimedTotal"] == 0
+    assert own_claim_state["pool"]["totalRewardsPaid"] == 14_575
+    after_own_claim_explorer = (
+        await seeded_client.get(
+            f"/api/v1/research-labs/sessions/{session_id}/explorer",
+            headers=headers,
+        )
+    ).json()["data"]
+    assert after_own_claim_explorer["rewardCandidates"] == [initial_candidate]
+
+    duplicate_own_claim = await _claim(seeded_client, headers, session_id, attacker_wallet)
+    assert duplicate_own_claim.status_code == 200
+    duplicate_own_claim_data = duplicate_own_claim.json()["data"]
+    assert duplicate_own_claim_data["executionStatus"] == "failure"
+    assert duplicate_own_claim_data["protocolState"]["lastRejectedReason"] == (
+        "NO_REWARDS_AVAILABLE"
+    )
+    assert duplicate_own_claim_data["protocolState"]["position"]["pendingRewards"] == 12_500
+    assert duplicate_own_claim_data["protocolState"]["attacker"]["rewardBalance"] == 250
+
+    own_claim_verify = await seeded_client.post(
+        f"/api/v1/research-labs/sessions/{session_id}/verify-objective", headers=headers
+    )
+    assert own_claim_verify.status_code == 200
+    assert own_claim_verify.json()["data"]["impactVerified"] is False
 
     missing_instruction = await _claim(
         seeded_client, headers, session_id, victim_wallet, instruction_name=None
@@ -362,10 +406,13 @@ async def test_rl2_stake_claim_and_verify_flow(seeded_client: AsyncClient) -> No
     assert stake_state["position"]["owner"] == stake_state["attacker"]["wallet"]
     assert stake_state["position"]["stakedAmount"] == 50_001
     assert stake_state["position"]["pendingRewards"] == 12_500
+    assert stake_state["attacker"]["positionStakedAmount"] == 1_001
     assert stake_state["pool"]["stakeVaultBalance"] == 50_001
-    assert stake_state["pool"]["totalRewardsPaid"] == 14_325
-    assert stake_state["totalRewardsPaid"] == 14_325
-    assert stake_state["rewardsClaimedTotal"] == 0
+    assert stake_state["pool"]["totalRewardsPaid"] == 14_575
+    assert stake_state["totalRewardsPaid"] == 14_575
+    assert stake_state["rewardsClaimedTotal"] == 250
+    assert stake_state["ownRewardsClaimedTotal"] == 250
+    assert stake_state["exploitRewardsClaimedTotal"] == 0
     assert stake_state["attacker"]["stakeBalance"] == 99
 
     stake_only_verify = await seeded_client.post(
@@ -390,12 +437,15 @@ async def test_rl2_stake_claim_and_verify_flow(seeded_client: AsyncClient) -> No
     assert claim_data["executionStatus"] == "success"
     assert claim_data["parameters"]["instruction_name"] == "claim_rewards"
     claim_state = claim_data["protocolState"]
-    assert claim_state["attacker"]["rewardBalance"] == 12_500
-    assert claim_state["pool"]["rewardVaultBalance"] == 487_500
+    assert claim_data["parameters"]["claim_scope"] == "exploit"
+    assert claim_state["attacker"]["rewardBalance"] == 12_750
+    assert claim_state["pool"]["rewardVaultBalance"] == 487_250
     assert claim_state["position"]["pendingRewards"] == 0
-    assert claim_state["rewardsClaimedTotal"] == 12_500
-    assert claim_state["pool"]["totalRewardsPaid"] == 26_825
-    assert claim_state["totalRewardsPaid"] == 26_825
+    assert claim_state["rewardsClaimedTotal"] == 12_750
+    assert claim_state["ownRewardsClaimedTotal"] == 250
+    assert claim_state["exploitRewardsClaimedTotal"] == 12_500
+    assert claim_state["pool"]["totalRewardsPaid"] == 27_075
+    assert claim_state["totalRewardsPaid"] == 27_075
     after_claim_explorer = (
         await seeded_client.get(
             f"/api/v1/research-labs/sessions/{session_id}/explorer",
@@ -403,7 +453,7 @@ async def test_rl2_stake_claim_and_verify_flow(seeded_client: AsyncClient) -> No
         )
     ).json()["data"]
     assert after_claim_explorer["rewardCandidates"] == []
-    assert after_claim_explorer["totalRewardsPaid"] == 26_825
+    assert after_claim_explorer["totalRewardsPaid"] == 27_075
 
     second_claim = await _claim(seeded_client, headers, session_id, victim_wallet)
     assert second_claim.status_code == 200
