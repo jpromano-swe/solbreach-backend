@@ -981,6 +981,7 @@ def _explorer_payload(snapshot: SandboxExplorerSnapshot) -> dict:
         "network": snapshot.network,
         "program": snapshot.program,
         "accounts": snapshot.accounts,
+        "participants": snapshot.participants,
         "rewardCandidates": snapshot.reward_candidates,
         "rewardAsset": snapshot.reward_asset,
         "totalRewardsPaid": snapshot.total_rewards_paid,

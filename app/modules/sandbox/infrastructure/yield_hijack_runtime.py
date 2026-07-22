@@ -42,6 +42,37 @@ POOL_REWARDS_PAID_BASELINE = 14_325
 REWARD_DISPLAY_SYMBOL = "USDC"
 REWARD_DISPLAY_DECIMALS = 6
 TOKEN_PROGRAM_ID = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+SYSTEM_PROGRAM_ID = "11111111111111111111111111111111"
+PARTICIPANT_DECOYS = (
+    {
+        "index": 2,
+        "stakeAmount": 18_000,
+        "claimableRewards": 0,
+        "rewardSymbol": REWARD_DISPLAY_SYMBOL,
+        "status": "claimed",
+    },
+    {
+        "index": 3,
+        "stakeAmount": 7_500,
+        "claimableRewards": 420,
+        "rewardSymbol": "STAKE",
+        "status": "different_reward_mint",
+    },
+    {
+        "index": 4,
+        "stakeAmount": 0,
+        "claimableRewards": 0,
+        "rewardSymbol": REWARD_DISPLAY_SYMBOL,
+        "status": "inactive",
+    },
+    {
+        "index": 5,
+        "stakeAmount": 22_400,
+        "claimableRewards": 0,
+        "rewardSymbol": REWARD_DISPLAY_SYMBOL,
+        "status": "no_pending_rewards",
+    },
+)
 
 YIELD_ACCOUNT_LABELS = {
     "pool_config": "Pool Configuration",
@@ -53,6 +84,11 @@ YIELD_ACCOUNT_LABELS = {
     "stake_position": "Staking Position",
     "user_wallet": "User Wallet",
     "existing_staker_wallet": "Existing Staker Wallet",
+    "pool_participant_1_wallet": "Pool Participant 1",
+    "pool_participant_2_wallet": "Pool Participant 2",
+    "pool_participant_3_wallet": "Pool Participant 3",
+    "pool_participant_4_wallet": "Pool Participant 4",
+    "pool_participant_5_wallet": "Pool Participant 5",
     "user_stake_account": "User Stake Account",
     "user_reward_account": "User Reward Account",
     "existing_staker_stake_account": "Existing Staker Stake Account",
@@ -83,6 +119,9 @@ class YieldHijackMaterializer:
         self.program_id = self._derive_keypair("program").pubkey()
         self.attacker = self._derive_keypair("attacker")
         self.victim = self._derive_keypair("victim")
+        self.decoy_participants = [
+            self._derive_keypair(f"participant_{item['index']}") for item in PARTICIPANT_DECOYS
+        ]
         self.pool_config = self._derive_keypair("pool_config").pubkey()
         self.stake_mint = self._derive_keypair("stake_mint").pubkey()
         self.reward_mint = self._derive_keypair("reward_mint").pubkey()
@@ -110,6 +149,11 @@ class YieldHijackMaterializer:
             "stake_position": self.stake_position,
             "user_wallet": self.attacker.pubkey(),
             "existing_staker_wallet": self.victim.pubkey(),
+            "pool_participant_1_wallet": self.victim.pubkey(),
+            **{
+                f"pool_participant_{item['index']}_wallet": keypair.pubkey()
+                for item, keypair in zip(PARTICIPANT_DECOYS, self.decoy_participants, strict=True)
+            },
             "user_stake_account": self.attacker_stake_account,
             "user_reward_account": self.attacker_reward_account,
             "existing_staker_stake_account": self.victim_stake_account,
@@ -332,6 +376,10 @@ class YieldHijackRuntime:
                 {"tokenAmount": state.pool["rewardVaultBalance"], "mint": str(mat.reward_mint)},
             ),
             _summary("stake_position", pubkeys["stake_position"], state.position),
+            *[
+                _summary(ref, pubkeys[ref], _participant_account_data(ref, state, mat))
+                for ref in _participant_refs()
+            ],
             _summary(
                 "user_stake_account",
                 pubkeys["user_stake_account"],
@@ -403,12 +451,14 @@ class YieldHijackRuntime:
                     "stake_vault",
                     "reward_vault",
                     "stake_position",
+                    *_participant_refs(),
                     "user_stake_account",
                     "user_reward_account",
                     "existing_staker_stake_account",
                     "existing_staker_reward_account",
                 ]
             ],
+            participants=_participant_profiles(state, mat),
             reward_candidates=_reward_candidates(state),
             reward_asset={
                 "mintRef": "reward_mint",
@@ -454,7 +504,7 @@ class YieldHijackRuntime:
             )
         after = await mat.state(extra_successful=extra_successful)
         account_deltas = _build_yield_deltas(before, after)
-        protocol_state = _protocol_state(after)
+        protocol_state = _protocol_state(after, mat)
         if failure_code is not None:
             protocol_state["lastRejectedReason"] = failure_code
         return SandboxTransactionResult(
@@ -568,7 +618,7 @@ class YieldHijackRuntime:
                 "positionOwnerAfter": state.position["owner"],
             },
             "impactChecklist": checks,
-            "protocolState": _protocol_state(state),
+            "protocolState": _protocol_state(state, mat),
             "transactionTimeline": [
                 {
                     "transactionRef": tx.transaction_ref,
@@ -639,10 +689,14 @@ def _explorer_account(
 def _owner_program(ref: str, program_address: str) -> str:
     if ref in {"pool_config", "pool_authority", "stake_position"}:
         return program_address
+    if ref in _participant_refs():
+        return SYSTEM_PROGRAM_ID
     return TOKEN_PROGRAM_ID
 
 
 def _account_type(ref: str) -> str:
+    if ref in _participant_refs():
+        return "Wallet"
     return {
         "pool_config": "PoolConfig",
         "pool_authority": "ProgramDerivedAddress",
@@ -656,6 +710,67 @@ def _account_type(ref: str) -> str:
         "existing_staker_stake_account": "TokenAccount",
         "existing_staker_reward_account": "TokenAccount",
     }.get(ref, "Account")
+
+
+def _participant_refs() -> list[str]:
+    return [f"pool_participant_{index}_wallet" for index in range(1, 6)]
+
+
+def _participant_profiles(state: YieldHijackState, mat: YieldHijackMaterializer) -> list[dict]:
+    active = {
+        "index": 1,
+        "stakeAmount": state.position["baselineStakedAmount"],
+        "claimableRewards": state.position["pendingRewards"],
+        "rewardSymbol": REWARD_DISPLAY_SYMBOL,
+        "status": "active_position",
+    }
+    items = [active, *PARTICIPANT_DECOYS]
+    pubkeys = mat.account_pubkeys()
+    profiles = []
+    for item in items:
+        ref = f"pool_participant_{item['index']}_wallet"
+        reward_symbol = str(item["rewardSymbol"])
+        profiles.append(
+            {
+                "ref": ref,
+                "label": YIELD_ACCOUNT_LABELS[ref],
+                "walletAddress": str(pubkeys[ref]),
+                "positionRef": "stake_position",
+                "positionAddress": state.position["address"],
+                "stakeAmount": int(item["stakeAmount"]),
+                "claimableRewards": int(item["claimableRewards"]),
+                "rewardMintRef": "reward_mint"
+                if reward_symbol == REWARD_DISPLAY_SYMBOL
+                else "stake_mint",
+                "rewardSymbol": reward_symbol,
+                "status": item["status"],
+            }
+        )
+    return profiles
+
+
+def _participant_account_data(
+    ref: str, state: YieldHijackState, mat: YieldHijackMaterializer
+) -> dict:
+    for participant in _participant_profiles(state, mat):
+        if participant["ref"] != ref:
+            continue
+        reward_symbol = participant["rewardSymbol"]
+        return {
+            "walletAddress": participant["walletAddress"],
+            "pool": state.pool["address"],
+            "derivedPositionAddress": participant["positionAddress"],
+            "positionRef": participant["positionRef"],
+            "stakeAmount": participant["stakeAmount"],
+            "claimableRewards": participant["claimableRewards"],
+            "rewardMint": str(mat.reward_mint)
+            if reward_symbol == REWARD_DISPLAY_SYMBOL
+            else str(mat.stake_mint),
+            "rewardMintRef": participant["rewardMintRef"],
+            "rewardSymbol": reward_symbol,
+            "positionStatus": participant["status"],
+        }
+    return {}
 
 
 def _reward_candidates(state: YieldHijackState) -> list[dict]:
@@ -680,6 +795,8 @@ def _account_data(ref: str, state: YieldHijackState, mat: YieldHijackMaterialize
         return state.pool
     if ref == "pool_authority":
         return {"pool": str(mat.pool_config)}
+    if ref in _participant_refs():
+        return _participant_account_data(ref, state, mat)
     if ref == "stake_position":
         return state.position | {"derivations": state.derivations}
     if ref == "stake_vault":
@@ -904,7 +1021,7 @@ def _build_yield_deltas(before: YieldHijackState, after: YieldHijackState) -> li
     return deltas
 
 
-def _protocol_state(state: YieldHijackState) -> dict:
+def _protocol_state(state: YieldHijackState, mat: YieldHijackMaterializer) -> dict:
     return {
         "pool": state.pool,
         "position": state.position,
@@ -914,6 +1031,8 @@ def _protocol_state(state: YieldHijackState) -> dict:
         "successfulStakes": state.successful_stakes,
         "successfulClaims": state.successful_claims,
         "failedTransactions": state.failed_transactions,
+        "participants": _participant_profiles(state, mat),
+        "rewardCandidates": _reward_candidates(state),
         "userStakedTotal": sum(item["amount"] for item in state.successful_stakes),
         "rewardsClaimedTotal": sum(item["amount"] for item in state.successful_claims),
         "ownRewardsClaimedTotal": sum(

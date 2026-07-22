@@ -48,6 +48,7 @@ class SandboxExplorerSnapshot:
     network: dict
     program: dict
     accounts: list[dict]
+    participants: list[dict] = field(default_factory=list)
     reward_candidates: list[dict] = field(default_factory=list)
     reward_asset: dict | None = None
     total_rewards_paid: int = 0
