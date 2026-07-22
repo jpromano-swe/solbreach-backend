@@ -51,12 +51,12 @@ YIELD_ACCOUNT_LABELS = {
     "stake_vault": "Stake Vault",
     "reward_vault": "Reward Vault",
     "stake_position": "Staking Position",
-    "attacker_wallet": "Attacker Wallet",
-    "victim_wallet": "Victim Wallet",
-    "attacker_stake_account": "Attacker Stake Account",
-    "attacker_reward_account": "Attacker Reward Account",
-    "victim_stake_account": "Victim Stake Account",
-    "victim_reward_account": "Victim Reward Account",
+    "user_wallet": "User Wallet",
+    "existing_staker_wallet": "Existing Staker Wallet",
+    "user_stake_account": "User Stake Account",
+    "user_reward_account": "User Reward Account",
+    "existing_staker_stake_account": "Existing Staker Stake Account",
+    "existing_staker_reward_account": "Existing Staker Reward Account",
 }
 
 
@@ -108,12 +108,12 @@ class YieldHijackMaterializer:
             "stake_vault": self.stake_vault,
             "reward_vault": self.reward_vault,
             "stake_position": self.stake_position,
-            "attacker_wallet": self.attacker.pubkey(),
-            "victim_wallet": self.victim.pubkey(),
-            "attacker_stake_account": self.attacker_stake_account,
-            "attacker_reward_account": self.attacker_reward_account,
-            "victim_stake_account": self.victim_stake_account,
-            "victim_reward_account": self.victim_reward_account,
+            "user_wallet": self.attacker.pubkey(),
+            "existing_staker_wallet": self.victim.pubkey(),
+            "user_stake_account": self.attacker_stake_account,
+            "user_reward_account": self.attacker_reward_account,
+            "existing_staker_stake_account": self.victim_stake_account,
+            "existing_staker_reward_account": self.victim_reward_account,
         }
 
     def _derive_keypair(self, role: str) -> Keypair:
@@ -255,11 +255,11 @@ class YieldHijackMaterializer:
             "baselinePendingRewards": VICTIM_PENDING_REWARDS,
         }
         derivations = {
-            "victim_position": {
+            "existing_staker_position": {
                 "address": str(self.stake_position),
                 "seeds": ["stake_position", str(self.pool_config)],
             },
-            "attacker_position": {
+            "user_position": {
                 "address": str(self.stake_position),
                 "seeds": ["stake_position", str(self.pool_config)],
             },
@@ -333,16 +333,16 @@ class YieldHijackRuntime:
             ),
             _summary("stake_position", pubkeys["stake_position"], state.position),
             _summary(
-                "attacker_stake_account",
-                pubkeys["attacker_stake_account"],
+                "user_stake_account",
+                pubkeys["user_stake_account"],
                 {
                     "tokenAmount": state.attacker["stakeBalance"],
                     "owner": str(mat.attacker.pubkey()),
                 },
             ),
             _summary(
-                "attacker_reward_account",
-                pubkeys["attacker_reward_account"],
+                "user_reward_account",
+                pubkeys["user_reward_account"],
                 {
                     "tokenAmount": state.attacker["rewardBalance"],
                     "claimableRewards": state.attacker["pendingRewards"],
@@ -350,13 +350,13 @@ class YieldHijackRuntime:
                 },
             ),
             _summary(
-                "victim_stake_account",
-                pubkeys["victim_stake_account"],
+                "existing_staker_stake_account",
+                pubkeys["existing_staker_stake_account"],
                 {"tokenAmount": state.victim["stakeBalance"], "owner": str(mat.victim.pubkey())},
             ),
             _summary(
-                "victim_reward_account",
-                pubkeys["victim_reward_account"],
+                "existing_staker_reward_account",
+                pubkeys["existing_staker_reward_account"],
                 {"tokenAmount": state.victim["rewardBalance"], "owner": str(mat.victim.pubkey())},
             ),
         ]
@@ -403,10 +403,10 @@ class YieldHijackRuntime:
                     "stake_vault",
                     "reward_vault",
                     "stake_position",
-                    "attacker_stake_account",
-                    "attacker_reward_account",
-                    "victim_stake_account",
-                    "victim_reward_account",
+                    "user_stake_account",
+                    "user_reward_account",
+                    "existing_staker_stake_account",
+                    "existing_staker_reward_account",
                 ]
             ],
             reward_candidates=_reward_candidates(state),
@@ -501,7 +501,7 @@ class YieldHijackRuntime:
             ),
             None,
         )
-        attacker_staked = sum(item["amount"] for item in state.successful_stakes)
+        user_staked = sum(item["amount"] for item in state.successful_stakes)
         rewards_claimed = sum(
             item["amount"] for item in state.successful_claims if item["claimScope"] == "exploit"
         )
@@ -509,21 +509,21 @@ class YieldHijackRuntime:
             item["amount"] for item in state.successful_claims if item["claimScope"] == "own"
         )
         total_rewards_claimed = rewards_claimed + own_rewards_claimed
-        attacker_reward_delta = state.attacker["rewardBalance"] - ATTACKER_INITIAL_REWARD
+        user_reward_delta = state.attacker["rewardBalance"] - ATTACKER_INITIAL_REWARD
         reward_vault_delta = state.pool["rewardVaultBalance"] - REWARD_VAULT_INITIAL_BALANCE
         derivation_collision = (
-            state.derivations["victim_position"]["address"]
-            == state.derivations["attacker_position"]["address"]
+            state.derivations["existing_staker_position"]["address"]
+            == state.derivations["user_position"]["address"]
         )
         checks = {
-            "baselinePositionOwnerWasVictim": state.position["baselineOwner"]
+            "baselinePositionOwnerWasExistingStaker": state.position["baselineOwner"]
             == str(mat.victim.pubkey()),
-            "currentPositionOwnerIsAttacker": state.position["owner"] == str(mat.attacker.pubkey()),
-            "attackerStakeObserved": successful_stake is not None,
-            "victimStakePreserved": state.position["stakedAmount"]
-            == VICTIM_STAKED_AMOUNT + attacker_staked,
+            "currentPositionOwnerIsUser": state.position["owner"] == str(mat.attacker.pubkey()),
+            "userStakeObserved": successful_stake is not None,
+            "existingStakerStakePreserved": state.position["stakedAmount"]
+            == VICTIM_STAKED_AMOUNT + user_staked,
             "rewardClaimObserved": successful_claim is not None,
-            "attackerRewardsIncreased": rewards_claimed > 0,
+            "userRewardsIncreased": rewards_claimed > 0,
             "rewardVaultDecreased": reward_vault_delta < 0,
             "rewardDeltaMatches": total_rewards_claimed == -reward_vault_delta,
             "claimedPreExistingRewards": rewards_claimed == VICTIM_PENDING_REWARDS,
@@ -535,12 +535,12 @@ class YieldHijackRuntime:
         evidence_refs = []
         if derivation_collision:
             evidence_refs.append("position_address_collision")
-        if checks["currentPositionOwnerIsAttacker"]:
+        if checks["currentPositionOwnerIsUser"]:
             evidence_refs.append("position_owner_overwritten")
-        if checks["victimStakePreserved"]:
-            evidence_refs.append("victim_value_preserved")
-        if checks["attackerRewardsIncreased"]:
-            evidence_refs.append("attacker_rewards_increased")
+        if checks["existingStakerStakePreserved"]:
+            evidence_refs.append("existing_staker_value_preserved")
+        if checks["userRewardsIncreased"]:
+            evidence_refs.append("user_rewards_increased")
         if checks["rewardVaultDecreased"]:
             evidence_refs.append("reward_vault_decreased")
 
@@ -554,14 +554,14 @@ class YieldHijackRuntime:
             "missing_conditions": missing_conditions,
             "missingConditions": missing_conditions,
             "impact": {
-                "attacker_staked": attacker_staked,
-                "attackerStaked": attacker_staked,
+                "user_staked": user_staked,
+                "userStaked": user_staked,
                 "rewards_claimed": rewards_claimed,
                 "rewardsClaimed": rewards_claimed,
                 "own_rewards_claimed": own_rewards_claimed,
                 "ownRewardsClaimed": own_rewards_claimed,
-                "total_rewards_claimed": attacker_reward_delta,
-                "totalRewardsClaimed": attacker_reward_delta,
+                "total_rewards_claimed": user_reward_delta,
+                "totalRewardsClaimed": user_reward_delta,
                 "position_owner_before": state.position["baselineOwner"],
                 "positionOwnerBefore": state.position["baselineOwner"],
                 "position_owner_after": state.position["owner"],
@@ -595,8 +595,8 @@ class YieldHijackRuntime:
             failure_reason=failure_reason,
             user_facing_evidence=(
                 [
-                    "Shared staking-position PDA was overwritten by the attacker.",
-                    "Pre-existing victim rewards were claimed by the attacker.",
+                    "The shared staking-position PDA owner changed after the submitted stake.",
+                    "Pre-existing position rewards were claimed by a different wallet.",
                 ]
                 if passed
                 else [failure_reason or "RL2 impact has not been verified."]
@@ -651,10 +651,10 @@ def _account_type(ref: str) -> str:
         "stake_vault": "TokenAccount",
         "reward_vault": "TokenAccount",
         "stake_position": "StakePosition",
-        "attacker_stake_account": "TokenAccount",
-        "attacker_reward_account": "TokenAccount",
-        "victim_stake_account": "TokenAccount",
-        "victim_reward_account": "TokenAccount",
+        "user_stake_account": "TokenAccount",
+        "user_reward_account": "TokenAccount",
+        "existing_staker_stake_account": "TokenAccount",
+        "existing_staker_reward_account": "TokenAccount",
     }.get(ref, "Account")
 
 
@@ -686,17 +686,17 @@ def _account_data(ref: str, state: YieldHijackState, mat: YieldHijackMaterialize
         return {"amount": state.pool["stakeVaultBalance"], "mint": str(mat.stake_mint)}
     if ref == "reward_vault":
         return {"amount": state.pool["rewardVaultBalance"], "mint": str(mat.reward_mint)}
-    if ref == "attacker_stake_account":
+    if ref == "user_stake_account":
         return {"amount": state.attacker["stakeBalance"], "owner": str(mat.attacker.pubkey())}
-    if ref == "attacker_reward_account":
+    if ref == "user_reward_account":
         return {
             "amount": state.attacker["rewardBalance"],
             "claimableRewards": state.attacker["pendingRewards"],
             "owner": str(mat.attacker.pubkey()),
         }
-    if ref == "victim_stake_account":
+    if ref == "existing_staker_stake_account":
         return {"amount": state.victim["stakeBalance"], "owner": str(mat.victim.pubkey())}
-    if ref == "victim_reward_account":
+    if ref == "existing_staker_reward_account":
         return {"amount": state.victim["rewardBalance"], "owner": str(mat.victim.pubkey())}
     if ref == "stake_mint":
         return {"symbol": "STAKE"}
@@ -715,11 +715,11 @@ def _execute_stake(
         return (
             False,
             "INSUFFICIENT_STAKE_BALANCE",
-            ["Stake amount exceeds attacker balance."],
+            ["Stake amount exceeds the user balance."],
             params,
         )
     required_refs = {
-        "source_account_ref": "attacker_stake_account",
+        "source_account_ref": "user_stake_account",
         "stake_vault_ref": "stake_vault",
         "position_account_ref": "stake_position",
     }
@@ -759,7 +759,7 @@ def _execute_claim(
     required_refs = {
         "position_account_ref": "stake_position",
         "reward_vault_ref": "reward_vault",
-        "destination_account_ref": "attacker_reward_account",
+        "destination_account_ref": "user_reward_account",
     }
     ref_error = _validate_refs(params, required_refs)
     if ref_error is not None:
@@ -820,13 +820,13 @@ def _validate_refs(params: dict, expected: dict[str, str]) -> str | None:
 def _failure_summary(code: str | None) -> str:
     return {
         "INVALID_AMOUNT": "Stake amount must be greater than zero.",
-        "INSUFFICIENT_STAKE_BALANCE": "Stake amount exceeds the attacker stake balance.",
+        "INSUFFICIENT_STAKE_BALANCE": "Stake amount exceeds the user stake balance.",
         "INVALID_ACCOUNT_REF": "One or more account refs do not belong to this session action.",
         "INSTRUCTION_NAME_REQUIRED": "Claim instruction name is required.",
         "INVALID_INSTRUCTION_NAME": "Claim instruction name must be claim_rewards.",
         "TARGET_WALLET_REQUIRED": "Target wallet address is required.",
         "INVALID_TARGET_WALLET": "Target wallet does not match the reward candidate.",
-        "INVALID_POSITION_OWNER": "The attacker does not own the staking position yet.",
+        "INVALID_POSITION_OWNER": "The signer does not own the staking position yet.",
         "NO_REWARDS_AVAILABLE": "No rewards are available to claim.",
         "UNSUPPORTED_ACTION": "Unsupported sandbox action.",
     }.get(code or "", "Transaction failed.")
@@ -859,19 +859,19 @@ def _build_yield_deltas(before: YieldHijackState, after: YieldHijackState) -> li
             after.pool["rewardVaultBalance"],
         ),
         (
-            "attacker_stake_account",
+            "user_stake_account",
             "tokenAmount",
             before.attacker["stakeBalance"],
             after.attacker["stakeBalance"],
         ),
         (
-            "attacker_reward_account",
+            "user_reward_account",
             "tokenAmount",
             before.attacker["rewardBalance"],
             after.attacker["rewardBalance"],
         ),
         (
-            "attacker_reward_account",
+            "user_reward_account",
             "claimableRewards",
             before.attacker["pendingRewards"],
             after.attacker["pendingRewards"],
@@ -908,13 +908,13 @@ def _protocol_state(state: YieldHijackState) -> dict:
     return {
         "pool": state.pool,
         "position": state.position,
-        "attacker": state.attacker,
-        "victim": state.victim,
+        "user": state.attacker,
+        "existingStaker": state.victim,
         "derivations": state.derivations,
         "successfulStakes": state.successful_stakes,
         "successfulClaims": state.successful_claims,
         "failedTransactions": state.failed_transactions,
-        "attackerStakedTotal": sum(item["amount"] for item in state.successful_stakes),
+        "userStakedTotal": sum(item["amount"] for item in state.successful_stakes),
         "rewardsClaimedTotal": sum(item["amount"] for item in state.successful_claims),
         "ownRewardsClaimedTotal": sum(
             item["amount"] for item in state.successful_claims if item["claimScope"] == "own"
@@ -924,7 +924,7 @@ def _protocol_state(state: YieldHijackState) -> dict:
         ),
         "totalRewardsPaid": state.pool["totalRewardsPaid"],
         "positionDerivationCollision": (
-            state.derivations["victim_position"]["address"]
-            == state.derivations["attacker_position"]["address"]
+            state.derivations["existing_staker_position"]["address"]
+            == state.derivations["user_position"]["address"]
         ),
     }
