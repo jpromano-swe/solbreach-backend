@@ -79,6 +79,20 @@ def _correct_rl2_finding_review_answers() -> dict[str, str]:
     }
 
 
+def _accepted_rl2_report_fields(verified_evidence_refs: list[str]) -> dict:
+    return {
+        "titleOptionId": "static_staking_position_reward_hijack",
+        "severityOptionId": "high",
+        "likelihoodOptionId": "high",
+        "categoryOptionId": "static_pda",
+        "rootCauseOptionId": "static_pda_missing_user_seed",
+        "proofOfImpactOptionId": "position_owner_overwrite_reward_claim",
+        "recommendedMitigationOptionId": "scope_position_pda_by_pool_and_user",
+        "verifiedEvidenceRefs": verified_evidence_refs,
+        "optionalNotes": "Verified static PDA reward hijack.",
+    }
+
+
 PARTICIPANT_REFS = {f"pool_participant_{index}_wallet" for index in range(1, 6)}
 
 
@@ -569,6 +583,43 @@ async def test_rl2_stake_claim_and_verify_flow(seeded_client: AsyncClient) -> No
     assert good_review_data["status"] == "passed"
     assert good_review_data["findingReviewPassed"] is True
     assert good_review_data["failedQuestionIds"] == []
+
+    report = await seeded_client.get(
+        f"/api/v1/research-labs/sessions/{session_id}/report",
+        headers=headers,
+    )
+    assert report.status_code == 200
+    report_data = report.json()["data"]
+    assert report_data["status"] == "draft"
+    assert report_data["allowedValues"]["titleOptionId"][0]["id"] == (
+        "static_staking_position_reward_hijack"
+    )
+    assert report_data["allowedValues"]["categoryOptionId"][0]["id"] == "static_pda"
+    assert report_data["allowedValues"]["titleOptionId"][0]["id"] != (
+        "missing_constraints_counterfeit_credit"
+    )
+
+    accepted_report_fields = _accepted_rl2_report_fields(verified_data["verifiedEvidenceRefs"])
+    draft = await seeded_client.put(
+        f"/api/v1/research-labs/sessions/{session_id}/report",
+        headers=headers,
+        json={"fields": accepted_report_fields},
+    )
+    assert draft.status_code == 200
+    assert draft.json()["data"]["fields"]["titleOptionId"] == (
+        "static_staking_position_reward_hijack"
+    )
+
+    accepted_report = await seeded_client.post(
+        f"/api/v1/research-labs/sessions/{session_id}/report/submit",
+        headers=headers,
+    )
+    assert accepted_report.status_code == 200
+    accepted_report_data = accepted_report.json()["data"]
+    assert accepted_report_data["status"] == "accepted"
+    assert accepted_report_data["labCompleted"] is True
+    assert accepted_report_data["certificateUnlockable"] is True
+    assert accepted_report_data["fields"]["categoryOptionId"] == "static_pda"
 
     transactions = await seeded_client.get(
         f"/api/v1/research-labs/sessions/{session_id}/transactions",

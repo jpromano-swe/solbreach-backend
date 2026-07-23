@@ -145,6 +145,80 @@ RL1_REPORT_OPTIONS: dict[str, list[dict[str, str]]] = {
     ],
 }
 
+RL2_REPORT_OPTIONS: dict[str, list[dict[str, str]]] = {
+    "titleOptionId": [
+        {
+            "id": "static_staking_position_reward_hijack",
+            "label": "Static staking position PDA enables reward hijacking",
+        }
+    ],
+    "severityOptionId": [{"id": "high", "label": "High"}],
+    "likelihoodOptionId": [{"id": "high", "label": "High"}],
+    "categoryOptionId": [{"id": "static_pda", "label": "Static PDA"}],
+    "rootCauseOptionId": [
+        {
+            "id": "static_pda_missing_user_seed",
+            "label": "Staking position PDA omits the user identity",
+        }
+    ],
+    "proofOfImpactOptionId": [
+        {
+            "id": "position_owner_overwrite_reward_claim",
+            "label": "Owner overwrite enabled a pre-existing reward claim",
+        }
+    ],
+    "recommendedMitigationOptionId": [
+        {
+            "id": "scope_position_pda_by_pool_and_user",
+            "label": "Scope the position PDA by pool and user",
+        }
+    ],
+}
+
+REPORT_OPTIONS_BY_LAB: dict[str, dict[str, list[dict[str, str]]]] = {
+    "rl1-account-substitution": RL1_REPORT_OPTIONS,
+    "rl2-yield-hijack": RL2_REPORT_OPTIONS,
+}
+
+REPORT_EXPECTED_FIELDS_BY_LAB: dict[str, dict[str, str]] = {
+    "rl1-account-substitution": {
+        "titleOptionId": "missing_constraints_counterfeit_credit",
+        "severityOptionId": "high_treasury_loss",
+        "likelihoodOptionId": "medium_high_attacker_supplied_accounts",
+        "categoryOptionId": "account_substitution",
+        "rootCauseOptionId": "missing_account_binding",
+        "proofOfImpactOptionId": "counterfeit_credit_withdraws_treasury",
+        "recommendedMitigationOptionId": "bind_accounts_to_approved_config",
+    },
+    "rl2-yield-hijack": {
+        "titleOptionId": "static_staking_position_reward_hijack",
+        "severityOptionId": "high",
+        "likelihoodOptionId": "high",
+        "categoryOptionId": "static_pda",
+        "rootCauseOptionId": "static_pda_missing_user_seed",
+        "proofOfImpactOptionId": "position_owner_overwrite_reward_claim",
+        "recommendedMitigationOptionId": "scope_position_pda_by_pool_and_user",
+    },
+}
+
+REPORT_ACCEPTED_FEEDBACK_BY_LAB: dict[str, str] = {
+    "rl1-account-substitution": (
+        "Audit report accepted. Evidence, severity, root cause, and mitigation "
+        "align with the verified account substitution impact."
+    ),
+    "rl2-yield-hijack": (
+        "Audit report accepted. Evidence, severity, root cause, and mitigation "
+        "align with the verified static PDA reward-hijack impact."
+    ),
+}
+
+REPORT_RETRY_FEEDBACK_BY_LAB: dict[str, str] = {
+    "rl1-account-substitution": (
+        "Report option IDs do not match the verified RL1 vulnerability model."
+    ),
+    "rl2-yield-hijack": ("Report option IDs do not match the verified RL2 vulnerability model."),
+}
+
 
 class ResearchLabService:
     def __init__(
@@ -504,6 +578,7 @@ class ResearchLabService:
                 feedback=None,
                 impact_verified=session.impact_verified,
                 include_allowed_values=True,
+                lab_id=session.lab_id,
                 verified_evidence_refs=session.verified_evidence_refs_json,
                 certificate_unlockable=_certificate_unlockable(session),
             )
@@ -511,6 +586,7 @@ class ResearchLabService:
             report,
             impact_verified=session.impact_verified,
             include_allowed_values=True,
+            lab_id=session.lab_id,
             verified_evidence_refs=session.verified_evidence_refs_json,
             certificate_unlockable=_certificate_unlockable(session),
         )
@@ -549,6 +625,7 @@ class ResearchLabService:
             impact_verified=session.impact_verified,
             include_updated_at=True,
             include_allowed_values=True,
+            lab_id=session.lab_id,
             verified_evidence_refs=session.verified_evidence_refs_json,
             certificate_unlockable=_certificate_unlockable(session),
         )
@@ -587,10 +664,7 @@ class ResearchLabService:
                 lab_id=session.lab_id,
                 status=ResearchLabReportStatus.ACCEPTED.value,
                 fields=_normalize_report_fields(fields),
-                feedback=(
-                    "Audit report accepted. Evidence, severity, root cause, and mitigation "
-                    "align with the verified account substitution impact."
-                ),
+                feedback=_report_accepted_feedback(session.lab_id),
                 validation_result=validation,
                 submitted_at=now,
                 accepted_at=now,
@@ -610,6 +684,7 @@ class ResearchLabService:
                 impact_verified=session.impact_verified,
                 include_allowed_values=True,
                 include_updated_at=True,
+                lab_id=session.lab_id,
                 verified_evidence_refs=session.verified_evidence_refs_json,
                 certificate_unlockable=_certificate_unlockable(session),
             )
@@ -631,7 +706,7 @@ class ResearchLabService:
             lab_id=session.lab_id,
             status=ResearchLabReportStatus.RETRY.value,
             fields=_normalize_report_fields(fields),
-            feedback="Report option IDs do not match the verified RL1 vulnerability model.",
+            feedback=_report_retry_feedback(session.lab_id),
             validation_result=validation,
             submitted_at=now,
             accepted_at=None,
@@ -650,6 +725,7 @@ class ResearchLabService:
             impact_verified=session.impact_verified,
             include_allowed_values=True,
             include_updated_at=True,
+            lab_id=session.lab_id,
             verified_evidence_refs=session.verified_evidence_refs_json,
             certificate_unlockable=_certificate_unlockable(session),
         )
@@ -1081,8 +1157,9 @@ def _empty_report_fields() -> dict[str, str | None]:
     }
 
 
-def _allowed_report_values() -> dict[str, list[dict[str, str]]]:
-    return RL1_REPORT_OPTIONS.copy()
+def _allowed_report_values(lab_id: str | None = None) -> dict[str, list[dict[str, str]]]:
+    options = REPORT_OPTIONS_BY_LAB.get(lab_id or "", RL1_REPORT_OPTIONS)
+    return {key: [dict(item) for item in values] for key, values in options.items()}
 
 
 def _normalize_report_fields(fields: dict) -> dict[str, str | None]:
@@ -1106,6 +1183,7 @@ def _report_payload(
     feedback: str | None,
     impact_verified: bool,
     include_allowed_values: bool = False,
+    lab_id: str | None = None,
     verified_evidence_refs: list[str] | None = None,
     certificate_unlockable: bool = False,
     updated_at: str | None = None,
@@ -1122,8 +1200,9 @@ def _report_payload(
         "certificateUnlockable": certificate_unlockable,
     }
     if include_allowed_values:
-        payload["allowed_values"] = _allowed_report_values()
-        payload["allowedValues"] = _allowed_report_values()
+        allowed_values = _allowed_report_values(lab_id)
+        payload["allowed_values"] = allowed_values
+        payload["allowedValues"] = allowed_values
     if updated_at is not None:
         payload["updated_at"] = updated_at
         payload["updatedAt"] = updated_at
@@ -1136,6 +1215,7 @@ def _stored_report_payload(
     impact_verified: bool,
     include_allowed_values: bool = False,
     include_updated_at: bool = False,
+    lab_id: str | None = None,
     verified_evidence_refs: list[str] | None = None,
     certificate_unlockable: bool = False,
 ) -> dict:
@@ -1147,6 +1227,7 @@ def _stored_report_payload(
         feedback=report.feedback,
         impact_verified=impact_verified,
         include_allowed_values=include_allowed_values,
+        lab_id=lab_id or report.lab_id,
         verified_evidence_refs=verified_evidence_refs,
         certificate_unlockable=certificate_unlockable,
         updated_at=report.updated_at.isoformat() if include_updated_at else None,
@@ -1155,21 +1236,27 @@ def _stored_report_payload(
 
 def _validate_report(lab_id: str, fields: dict) -> dict:
     normalized = _normalize_report_fields(fields)
-    expected = {
-        "titleOptionId": "missing_constraints_counterfeit_credit",
-        "severityOptionId": "high_treasury_loss",
-        "likelihoodOptionId": "medium_high_attacker_supplied_accounts",
-        "categoryOptionId": "account_substitution",
-        "rootCauseOptionId": "missing_account_binding",
-        "proofOfImpactOptionId": "counterfeit_credit_withdraws_treasury",
-        "recommendedMitigationOptionId": "bind_accounts_to_approved_config",
-    }
+    expected = REPORT_EXPECTED_FIELDS_BY_LAB.get(
+        lab_id, REPORT_EXPECTED_FIELDS_BY_LAB["rl1-account-substitution"]
+    )
     failed = [
         key for key, expected_value in expected.items() if normalized.get(key) != expected_value
     ]
     if not normalized.get("verifiedEvidenceRefs"):
         failed.append("verifiedEvidenceRefs")
     return {"accepted": not failed, "failed_checks": failed}
+
+
+def _report_accepted_feedback(lab_id: str) -> str:
+    return REPORT_ACCEPTED_FEEDBACK_BY_LAB.get(
+        lab_id, REPORT_ACCEPTED_FEEDBACK_BY_LAB["rl1-account-substitution"]
+    )
+
+
+def _report_retry_feedback(lab_id: str) -> str:
+    return REPORT_RETRY_FEEDBACK_BY_LAB.get(
+        lab_id, REPORT_RETRY_FEEDBACK_BY_LAB["rl1-account-substitution"]
+    )
 
 
 def _initial_protocol_state(manifest: ResearchLabManifest | None = None) -> dict:
