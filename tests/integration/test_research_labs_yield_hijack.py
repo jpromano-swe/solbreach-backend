@@ -211,10 +211,6 @@ async def test_rl2_explorer_snapshot_contract(seeded_client: AsyncClient) -> Non
     assert accounts_by_ref["stake_position"]["accountType"] == "StakePosition"
     assert accounts_by_ref["stake_position"]["data"]["pendingRewards"] == 12_500
     assert accounts_by_ref["pool_participant_1_wallet"]["accountType"] == "Wallet"
-    assert accounts_by_ref["pool_participant_1_wallet"]["data"]["claimableRewards"] == 12_500
-    assert accounts_by_ref["pool_participant_1_wallet"]["data"]["rewardSymbol"] == "USDC"
-    assert accounts_by_ref["pool_participant_2_wallet"]["data"]["claimableRewards"] == 0
-    assert accounts_by_ref["pool_participant_3_wallet"]["data"]["rewardSymbol"] == "STAKE"
     assert accounts_by_ref["user_reward_account"]["data"]["amount"] == 0
     assert accounts_by_ref["user_reward_account"]["data"]["claimableRewards"] == 250
     assert accounts_by_ref["reward_mint"]["data"]["symbol"] == "USDC"
@@ -224,20 +220,26 @@ async def test_rl2_explorer_snapshot_contract(seeded_client: AsyncClient) -> Non
         for participant in explorer["participants"]
         if participant["rewardSymbol"] == "USDC" and participant["claimableRewards"] > 0
     ]
-    assert claimable_participants == [
-        {
-            "ref": "pool_participant_1_wallet",
-            "label": "Pool Participant 1",
-            "walletAddress": accounts_by_ref["stake_position"]["data"]["baselineOwner"],
-            "positionRef": "stake_position",
-            "positionAddress": accounts_by_ref["stake_position"]["address"],
-            "stakeAmount": 50_000,
-            "claimableRewards": 12_500,
-            "rewardMintRef": "reward_mint",
-            "rewardSymbol": "USDC",
-            "status": "active_position",
-        }
-    ]
+    assert len(claimable_participants) == 1
+    claimable_participant = claimable_participants[0]
+    assert (
+        claimable_participant["walletAddress"]
+        == (accounts_by_ref["stake_position"]["data"]["baselineOwner"])
+    )
+    assert claimable_participant["positionRef"] == "stake_position"
+    assert claimable_participant["positionAddress"] == accounts_by_ref["stake_position"]["address"]
+    assert claimable_participant["stakeAmount"] == 50_000
+    assert claimable_participant["claimableRewards"] == 12_500
+    assert claimable_participant["rewardMintRef"] == "reward_mint"
+    assert claimable_participant["rewardSymbol"] == "USDC"
+    assert claimable_participant["status"] == "active_position"
+    assert accounts_by_ref[claimable_participant["ref"]]["data"]["claimableRewards"] == 12_500
+    assert accounts_by_ref[claimable_participant["ref"]]["data"]["rewardSymbol"] == "USDC"
+    assert all(
+        participant["rewardSymbol"] != "USDC" or participant["claimableRewards"] == 0
+        for participant in explorer["participants"]
+        if participant["ref"] != claimable_participant["ref"]
+    )
     assert explorer["rewardCandidates"] == [
         {
             "walletAddress": accounts_by_ref["stake_position"]["data"]["baselineOwner"],
@@ -308,7 +310,7 @@ async def test_rl2_stake_claim_and_verify_flow(seeded_client: AsyncClient) -> No
     decoy_wallet = next(
         participant
         for participant in initial_explorer["participants"]
-        if participant["ref"] == "pool_participant_2_wallet"
+        if participant["walletAddress"] != victim_wallet
     )["walletAddress"]
     attacker_wallet = next(
         account
@@ -431,7 +433,7 @@ async def test_rl2_stake_claim_and_verify_flow(seeded_client: AsyncClient) -> No
     assert decoy_target.status_code == 200
     assert decoy_target.json()["data"]["executionStatus"] == "failure"
     assert decoy_target.json()["data"]["protocolState"]["lastRejectedReason"] == (
-        "INVALID_TARGET_WALLET"
+        "NO_REWARDS_AVAILABLE"
     )
     after_decoy_target_explorer = (
         await seeded_client.get(
