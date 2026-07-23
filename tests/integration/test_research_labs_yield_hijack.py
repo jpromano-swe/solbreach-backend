@@ -66,6 +66,19 @@ async def _claim(
     )
 
 
+def _correct_rl2_finding_review_answers() -> dict[str, str]:
+    return {
+        "q1_vulnerability_category": "static_pda_missing_user_identity",
+        "q2_derivation_identity": "staker_public_key",
+        "q3_exploit_sequence": "existing_rewards_same_pda_stake_overwrite_claim",
+        "q4_preserved_value": "pending_rewards_preserved",
+        "q5_impact": "unauthorized_preexisting_reward_claim",
+        "q6_evidence": ("owner_changed_after_stake,position_pda_collision,reward_delta_matches"),
+        "q7_severity": "high",
+        "q8_recommended_fix": "scope_pda_by_pool_and_user",
+    }
+
+
 PARTICIPANT_REFS = {f"pool_participant_{index}_wallet" for index in range(1, 6)}
 
 
@@ -531,6 +544,31 @@ async def test_rl2_stake_claim_and_verify_flow(seeded_client: AsyncClient) -> No
     assert verified_data["evidence"]["vulnerabilityClass"] == "STATIC_PDA"
     assert verified_data["evidence"]["impact"]["userStaked"] == 1
     assert verified_data["evidence"]["impact"]["rewardsClaimed"] == 12_500
+
+    bad_review_answers = {
+        **_correct_rl2_finding_review_answers(),
+        "q1_vulnerability_category": "account_substitution",
+    }
+    bad_review = await seeded_client.post(
+        f"/api/v1/research-labs/sessions/{session_id}/finding-review/submit",
+        headers=headers,
+        json={"answers": bad_review_answers},
+    )
+    assert bad_review.status_code == 200
+    bad_review_data = bad_review.json()["data"]
+    assert bad_review_data["findingReviewPassed"] is False
+    assert bad_review_data["failedQuestionIds"] == ["q1_vulnerability_category"]
+
+    good_review = await seeded_client.post(
+        f"/api/v1/research-labs/sessions/{session_id}/finding-review/submit",
+        headers=headers,
+        json={"answers": _correct_rl2_finding_review_answers()},
+    )
+    assert good_review.status_code == 200
+    good_review_data = good_review.json()["data"]
+    assert good_review_data["status"] == "passed"
+    assert good_review_data["findingReviewPassed"] is True
+    assert good_review_data["failedQuestionIds"] == []
 
     transactions = await seeded_client.get(
         f"/api/v1/research-labs/sessions/{session_id}/transactions",

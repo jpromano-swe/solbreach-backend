@@ -73,6 +73,46 @@ RL1_FINDING_REVIEW_QUESTIONS: dict[str, dict[str, object]] = {
     },
 }
 
+RL2_FINDING_REVIEW_QUESTIONS: dict[str, dict[str, object]] = {
+    "q1_vulnerability_category": {
+        "correct": "static_pda_missing_user_identity",
+        "critical": True,
+    },
+    "q2_derivation_identity": {
+        "correct": "staker_public_key",
+        "critical": False,
+    },
+    "q3_exploit_sequence": {
+        "correct": "existing_rewards_same_pda_stake_overwrite_claim",
+        "critical": True,
+    },
+    "q4_preserved_value": {
+        "correct": "pending_rewards_preserved",
+        "critical": False,
+    },
+    "q5_impact": {
+        "correct": "unauthorized_preexisting_reward_claim",
+        "critical": True,
+    },
+    "q6_evidence": {
+        "correct": ("owner_changed_after_stake,position_pda_collision,reward_delta_matches"),
+        "critical": False,
+    },
+    "q7_severity": {
+        "correct": "high",
+        "critical": False,
+    },
+    "q8_recommended_fix": {
+        "correct": "scope_pda_by_pool_and_user",
+        "critical": True,
+    },
+}
+
+FINDING_REVIEW_QUESTIONS_BY_LAB: dict[str, dict[str, dict[str, object]]] = {
+    "rl1-account-substitution": RL1_FINDING_REVIEW_QUESTIONS,
+    "rl2-yield-hijack": RL2_FINDING_REVIEW_QUESTIONS,
+}
+
 RL1_REPORT_OPTIONS: dict[str, list[dict[str, str]]] = {
     "titleOptionId": [
         {
@@ -661,7 +701,7 @@ class ResearchLabService:
                     "id": question_id,
                     "critical": bool(config["critical"]),
                 }
-                for question_id, config in RL1_FINDING_REVIEW_QUESTIONS.items()
+                for question_id, config in _finding_review_questions_for(session.lab_id).items()
             ],
         }
 
@@ -671,7 +711,7 @@ class ResearchLabService:
         session = await self._owned_session(user.id, session_id)
         if not session.impact_verified:
             raise ConflictError("Verify exploit impact before submitting the finding review")
-        validation = _validate_finding_review(answers)
+        validation = _validate_finding_review(session.lab_id, answers)
         session.finding_review_attempts += 1
         session.finding_review_answers_json = answers
         session.finding_review_score = validation["score"]
@@ -1190,11 +1230,19 @@ def _initial_protocol_state(manifest: ResearchLabManifest | None = None) -> dict
     }
 
 
-def _validate_finding_review(answers: dict[str, str]) -> dict[str, object]:
+def _finding_review_questions_for(lab_id: str) -> dict[str, dict[str, object]]:
+    return FINDING_REVIEW_QUESTIONS_BY_LAB.get(
+        lab_id,
+        RL1_FINDING_REVIEW_QUESTIONS,
+    )
+
+
+def _validate_finding_review(lab_id: str, answers: dict[str, str]) -> dict[str, object]:
+    question_configs = _finding_review_questions_for(lab_id)
     failed_question_ids: list[str] = []
     failed_critical_questions: list[str] = []
-    total = len(RL1_FINDING_REVIEW_QUESTIONS)
-    for question_id, config in RL1_FINDING_REVIEW_QUESTIONS.items():
+    total = len(question_configs)
+    for question_id, config in question_configs.items():
         if answers.get(question_id) != config["correct"]:
             failed_question_ids.append(question_id)
             if bool(config["critical"]):
