@@ -8,10 +8,14 @@ from copy import deepcopy
 from pathlib import Path
 from uuid import uuid4
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions.domain import ConflictError, NotFoundError
-from app.modules.labs.infrastructure.database.models import ResearchLabSessionModel
+from app.modules.labs.infrastructure.database.models import (
+    ResearchLabSessionModel,
+    ResearchLabTransactionModel,
+)
 from app.modules.sandbox.domain.runtime import (
     SandboxAccountSnapshot,
     SandboxAccountSummary,
@@ -24,6 +28,11 @@ from app.modules.sandbox.domain.runtime import (
     SandboxVerificationResult,
     resolve_lab_file_path,
     resolve_lab_template_ref,
+)
+from app.modules.sandbox.infrastructure.arbitrary_cpi_runtime import (
+    ARBITRARY_CPI_OBJECTIVE_REF,
+    ARBITRARY_CPI_TEMPLATE_REF,
+    ArbitraryCPIRuntime,
 )
 from app.modules.sandbox.infrastructure.yield_hijack_runtime import (
     YIELD_HIJACK_OBJECTIVE_REF,
@@ -86,6 +95,8 @@ class LocalProcessSandboxRuntime(SandboxRuntime):
             self._write_state(session_id, _initial_treasury_mirage_state())
 
     async def read_file(self, session_id: str, path: str) -> str:
+        if await self._is_arbitrary_cpi_session(session_id):
+            return await self._arbitrary_cpi_runtime().read_file(path)
         if await self._is_yield_hijack_session(session_id):
             return await self._yield_hijack_runtime().read_file(path)
         file_path = self._safe_file_path(session_id, path)
@@ -149,6 +160,8 @@ class LocalProcessSandboxRuntime(SandboxRuntime):
             shutil.rmtree(workspace)
 
     async def get_visible_accounts(self, session_id: str) -> list[SandboxAccountSummary]:
+        if await self._is_arbitrary_cpi_session(session_id):
+            return await self._arbitrary_cpi_runtime().get_visible_accounts(session_id)
         if await self._is_yield_hijack_session(session_id):
             return await self._yield_hijack_runtime().get_visible_accounts(session_id)
         state = self._read_state(session_id)
@@ -165,6 +178,8 @@ class LocalProcessSandboxRuntime(SandboxRuntime):
         ]
 
     async def get_account_state(self, session_id: str, account_ref: str) -> SandboxAccountSnapshot:
+        if await self._is_arbitrary_cpi_session(session_id):
+            return await self._arbitrary_cpi_runtime().get_account_state(session_id, account_ref)
         if await self._is_yield_hijack_session(session_id):
             return await self._yield_hijack_runtime().get_account_state(session_id, account_ref)
         state = self._read_state(session_id)
@@ -186,6 +201,8 @@ class LocalProcessSandboxRuntime(SandboxRuntime):
         )
 
     async def get_explorer_snapshot(self, session_id: str) -> SandboxExplorerSnapshot:
+        if await self._is_arbitrary_cpi_session(session_id):
+            return await self._arbitrary_cpi_runtime().get_explorer_snapshot(session_id)
         if await self._is_yield_hijack_session(session_id):
             return await self._yield_hijack_runtime().get_explorer_snapshot(session_id)
         return SandboxExplorerSnapshot(
@@ -200,6 +217,10 @@ class LocalProcessSandboxRuntime(SandboxRuntime):
     async def submit_transaction(
         self, session_id: str, action_type: str, parameters: dict
     ) -> SandboxTransactionResult:
+        if await self._is_arbitrary_cpi_session(session_id):
+            return await self._arbitrary_cpi_runtime().submit_transaction(
+                session_id, action_type, parameters
+            )
         if await self._is_yield_hijack_session(session_id):
             return await self._yield_hijack_runtime().submit_transaction(
                 session_id, action_type, parameters
@@ -251,6 +272,18 @@ class LocalProcessSandboxRuntime(SandboxRuntime):
         )
 
     async def get_transaction_logs(self, session_id: str, transaction_ref: str) -> list[str]:
+        if await self._is_arbitrary_cpi_session(session_id) or await self._is_yield_hijack_session(
+            session_id
+        ):
+            if self._db_session is None:
+                return []
+            result = await self._db_session.execute(
+                select(ResearchLabTransactionModel)
+                .where(ResearchLabTransactionModel.session_id == session_id)
+                .where(ResearchLabTransactionModel.transaction_ref == transaction_ref)
+            )
+            tx = result.scalar_one_or_none()
+            return tx.logs_json if tx else []
         state = self._read_state(session_id)
         transaction = state["transactions"].get(transaction_ref)
         if transaction is None:
@@ -260,6 +293,10 @@ class LocalProcessSandboxRuntime(SandboxRuntime):
     async def verify_objective(
         self, session_id: str, objective_ref: str
     ) -> SandboxVerificationResult:
+        if await self._is_arbitrary_cpi_session(session_id):
+            if objective_ref != ARBITRARY_CPI_OBJECTIVE_REF:
+                raise NotFoundError("Sandbox objective not found")
+            return await self._arbitrary_cpi_runtime().verify_objective(session_id, objective_ref)
         if await self._is_yield_hijack_session(session_id):
             if objective_ref != YIELD_HIJACK_OBJECTIVE_REF:
                 raise NotFoundError("Sandbox objective not found")
@@ -419,11 +456,22 @@ class LocalProcessSandboxRuntime(SandboxRuntime):
             raise ConflictError("Sandbox state is not available for this session")
         return YieldHijackRuntime(self._template_root, self._db_session)
 
+    def _arbitrary_cpi_runtime(self) -> ArbitraryCPIRuntime:
+        if self._db_session is None:
+            raise ConflictError("Sandbox state is not available for this session")
+        return ArbitraryCPIRuntime(self._template_root, self._db_session)
+
     async def _is_yield_hijack_session(self, session_id: str) -> bool:
         if self._db_session is None:
             return False
         session = await self._db_session.get(ResearchLabSessionModel, session_id)
         return session is not None and session.template_ref == YIELD_HIJACK_TEMPLATE_REF
+
+    async def _is_arbitrary_cpi_session(self, session_id: str) -> bool:
+        if self._db_session is None:
+            return False
+        session = await self._db_session.get(ResearchLabSessionModel, session_id)
+        return session is not None and session.template_ref == ARBITRARY_CPI_TEMPLATE_REF
 
 
 def _terminal_events(stream: str, text: str) -> list[SandboxTerminalEvent]:

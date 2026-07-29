@@ -1,0 +1,34 @@
+{
+  "version": "1.0.0",
+  "name": "task_bounty",
+  "instructions": [
+    {
+      "name": "create_task",
+      "args": []
+    },
+    {
+      "name": "fund_task",
+      "args": []
+    },
+    {
+      "name": "delegate_payout",
+      "args": []
+    },
+    {
+      "name": "execute_delegated_payout",
+      "args": []
+    }
+  ],
+  "accounts": [
+    {
+      "name": "BountyConfig"
+    },
+    {
+      "name": "TaskRecord"
+    }
+  ],
+  "metadata": {
+    "name": "task_bounty",
+    "version": "1.0.0"
+  }
+}

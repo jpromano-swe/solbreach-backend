@@ -18,6 +18,7 @@ from app.modules.labs.presentation.api.research_lab_routes import (
 )
 from app.modules.labs.presentation.api.routes import router as labs_router
 from app.modules.levels.presentation.api.routes import router as levels_router
+from app.modules.onboarding.presentation.api.routes import router as onboarding_router
 from app.modules.progress.presentation.api.routes import router as progress_router
 from app.modules.submissions.presentation.api.routes import router as submissions_router
 from app.modules.users.presentation.api.routes import router as users_router
@@ -65,6 +66,7 @@ def create_app() -> FastAPI:
         certificate_router, prefix=f"{prefix}/certificates", tags=["certificates"]
     )
     app.include_router(waitlist_router, prefix=f"{prefix}/waitlist", tags=["waitlist"])
+    app.include_router(onboarding_router, prefix=f"{prefix}/onboarding", tags=["onboarding"])
     app.include_router(labs_router, prefix=f"{prefix}/labs", tags=["labs"])
     app.include_router(
         research_labs_router, prefix=f"{prefix}/research-labs", tags=["research-labs"]

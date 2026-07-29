@@ -20,6 +20,7 @@ from app.modules.labs.infrastructure.database.models import (
     ResearchLabTransactionModel,
 )
 from app.modules.levels.infrastructure.database.models import LevelModel, LevelSessionModel
+from app.modules.onboarding.infrastructure.database.models import OnboardingResponseModel
 from app.modules.progress.infrastructure.database.models import ProgressModel
 from app.modules.submissions.infrastructure.database.models import SubmissionModel
 from app.modules.users.infrastructure.database.models import UserModel
@@ -46,6 +47,7 @@ __all__ = [
     "ResearchLabTransactionModel",
     "LevelModel",
     "LevelSessionModel",
+    "OnboardingResponseModel",
     "ProgressModel",
     "SubmissionModel",
     "UserModel",

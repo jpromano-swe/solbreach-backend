@@ -108,9 +108,45 @@ RL2_FINDING_REVIEW_QUESTIONS: dict[str, dict[str, object]] = {
     },
 }
 
+RL3_FINDING_REVIEW_QUESTIONS: dict[str, dict[str, object]] = {
+    "q1_vulnerability_category": {
+        "correct": "arbitrary_cpi_target",
+        "critical": True,
+    },
+    "q2_public_instruction": {
+        "correct": "execute_delegated_payout",
+        "critical": False,
+    },
+    "q3_exploit_sequence": {
+        "correct": "build_deploy_delegate_execute_attacker_cpi",
+        "critical": True,
+    },
+    "q4_deployment_scope": {
+        "correct": "session_scoped_sandbox_program",
+        "critical": False,
+    },
+    "q5_impact": {
+        "correct": "task_escrow_drained_to_attacker_reward_account",
+        "critical": True,
+    },
+    "q6_evidence": {
+        "correct": "attacker_program_deployed,cpi_target_replaced,escrow_delta_matches",
+        "critical": False,
+    },
+    "q7_severity": {
+        "correct": "high",
+        "critical": False,
+    },
+    "q8_recommended_fix": {
+        "correct": "bind_cpi_target_to_approved_router",
+        "critical": True,
+    },
+}
+
 FINDING_REVIEW_QUESTIONS_BY_LAB: dict[str, dict[str, dict[str, object]]] = {
     "rl1-account-substitution": RL1_FINDING_REVIEW_QUESTIONS,
     "rl2-yield-hijack": RL2_FINDING_REVIEW_QUESTIONS,
+    "rl3-arbitrary-cpi": RL3_FINDING_REVIEW_QUESTIONS,
 }
 
 RL1_REPORT_OPTIONS: dict[str, list[dict[str, str]]] = {
@@ -175,9 +211,40 @@ RL2_REPORT_OPTIONS: dict[str, list[dict[str, str]]] = {
     ],
 }
 
+RL3_REPORT_OPTIONS: dict[str, list[dict[str, str]]] = {
+    "titleOptionId": [
+        {
+            "id": "arbitrary_cpi_target_bounty_drain",
+            "label": "Arbitrary CPI target enables bounty escrow drain",
+        }
+    ],
+    "severityOptionId": [{"id": "high", "label": "High"}],
+    "likelihoodOptionId": [{"id": "high", "label": "High"}],
+    "categoryOptionId": [{"id": "arbitrary_cpi", "label": "Arbitrary CPI"}],
+    "rootCauseOptionId": [
+        {
+            "id": "unbound_cpi_program_target",
+            "label": "Delegated payout accepts caller-supplied CPI program",
+        }
+    ],
+    "proofOfImpactOptionId": [
+        {
+            "id": "attacker_cpi_drains_task_escrow",
+            "label": "Attacker CPI program drained task escrow",
+        }
+    ],
+    "recommendedMitigationOptionId": [
+        {
+            "id": "bind_cpi_target_to_approved_router",
+            "label": "Bind CPI target to the approved payout router",
+        }
+    ],
+}
+
 REPORT_OPTIONS_BY_LAB: dict[str, dict[str, list[dict[str, str]]]] = {
     "rl1-account-substitution": RL1_REPORT_OPTIONS,
     "rl2-yield-hijack": RL2_REPORT_OPTIONS,
+    "rl3-arbitrary-cpi": RL3_REPORT_OPTIONS,
 }
 
 REPORT_EXPECTED_FIELDS_BY_LAB: dict[str, dict[str, str]] = {
@@ -199,6 +266,15 @@ REPORT_EXPECTED_FIELDS_BY_LAB: dict[str, dict[str, str]] = {
         "proofOfImpactOptionId": "position_owner_overwrite_reward_claim",
         "recommendedMitigationOptionId": "scope_position_pda_by_pool_and_user",
     },
+    "rl3-arbitrary-cpi": {
+        "titleOptionId": "arbitrary_cpi_target_bounty_drain",
+        "severityOptionId": "high",
+        "likelihoodOptionId": "high",
+        "categoryOptionId": "arbitrary_cpi",
+        "rootCauseOptionId": "unbound_cpi_program_target",
+        "proofOfImpactOptionId": "attacker_cpi_drains_task_escrow",
+        "recommendedMitigationOptionId": "bind_cpi_target_to_approved_router",
+    },
 }
 
 REPORT_ACCEPTED_FEEDBACK_BY_LAB: dict[str, str] = {
@@ -210,6 +286,10 @@ REPORT_ACCEPTED_FEEDBACK_BY_LAB: dict[str, str] = {
         "Audit report accepted. Evidence, severity, root cause, and mitigation "
         "align with the verified static PDA reward-hijack impact."
     ),
+    "rl3-arbitrary-cpi": (
+        "Audit report accepted. Evidence, severity, root cause, and mitigation "
+        "align with the verified arbitrary CPI bounty-drain impact."
+    ),
 }
 
 REPORT_RETRY_FEEDBACK_BY_LAB: dict[str, str] = {
@@ -217,6 +297,7 @@ REPORT_RETRY_FEEDBACK_BY_LAB: dict[str, str] = {
         "Report option IDs do not match the verified RL1 vulnerability model."
     ),
     "rl2-yield-hijack": ("Report option IDs do not match the verified RL2 vulnerability model."),
+    "rl3-arbitrary-cpi": ("Report option IDs do not match the verified RL3 vulnerability model."),
 }
 
 
@@ -1101,6 +1182,7 @@ def _explorer_payload(snapshot: SandboxExplorerSnapshot) -> dict:
         "rewardCandidates": snapshot.reward_candidates,
         "rewardAsset": snapshot.reward_asset,
         "totalRewardsPaid": snapshot.total_rewards_paid,
+        "protocolState": snapshot.protocol_state,
     }
 
 
@@ -1292,6 +1374,48 @@ def _initial_protocol_state(manifest: ResearchLabManifest | None = None) -> dict
             "attackerStakedTotal": 0,
             "rewardsClaimedTotal": 0,
             "positionDerivationCollision": True,
+        }
+    if manifest is not None and manifest.id == "rl3-arbitrary-cpi":
+        return {
+            "bountyPool": {
+                "totalEscrowed": 100_000,
+                "availableLiquidity": 100_000,
+                "paidOut": 0,
+            },
+            "task": {
+                "taskId": "task-security-review-001",
+                "status": "open",
+                "rewardAmount": 75_000,
+                "approvedDelegateProgram": "official_payout_router",
+                "delegatedProgram": "official_payout_router",
+                "escrowBalance": 75_000,
+            },
+            "user": {
+                "wallet": None,
+                "normalDelegationSubmitted": False,
+            },
+            "attackerProgram": {
+                "built": False,
+                "deployed": False,
+                "programAddress": None,
+                "drainDestination": "attacker_reward_account",
+            },
+            "attacker": {
+                "programBuilt": False,
+                "programDeployed": False,
+                "programAddress": None,
+                "rewardBalance": 0,
+            },
+            "cpi": {
+                "officialRouter": "official_payout_router",
+                "executedTarget": None,
+                "targetReplaced": False,
+            },
+            "successfulBuilds": [],
+            "successfulDeployments": [],
+            "successfulDelegations": [],
+            "successfulExecutions": [],
+            "failedTransactions": [],
         }
     return {
         "depositPathType": "none",

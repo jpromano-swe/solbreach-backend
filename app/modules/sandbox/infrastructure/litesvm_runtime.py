@@ -37,6 +37,11 @@ from app.modules.sandbox.infrastructure.yield_hijack_runtime import (
     YIELD_HIJACK_TEMPLATE_REF,
     YieldHijackRuntime,
 )
+from app.modules.sandbox.infrastructure.arbitrary_cpi_runtime import (
+    ARBITRARY_CPI_OBJECTIVE_REF,
+    ARBITRARY_CPI_TEMPLATE_REF,
+    ArbitraryCPIRuntime,
+)
 
 TOKEN_PROGRAM_ID = Pubkey.from_string("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA")
 SYS_PROGRAM_ID = Pubkey.from_string("11111111111111111111111111111111")
@@ -710,6 +715,8 @@ class LiteSVMSandboxRuntime(SandboxRuntime):
         pass
 
     async def read_file(self, session_id: str, path: str) -> str:
+        if await self._is_arbitrary_cpi_session(session_id):
+            return await ArbitraryCPIRuntime(self._template_root, self._db_session).read_file(path)
         if await self._is_yield_hijack_session(session_id):
             return await YieldHijackRuntime(self._template_root, self._db_session).read_file(path)
         file_path = (
@@ -736,6 +743,10 @@ class LiteSVMSandboxRuntime(SandboxRuntime):
         pass
 
     async def get_visible_accounts(self, session_id: str) -> list[SandboxAccountSummary]:
+        if await self._is_arbitrary_cpi_session(session_id):
+            return await ArbitraryCPIRuntime(
+                self._template_root, self._db_session
+            ).get_visible_accounts(session_id)
         if await self._is_yield_hijack_session(session_id):
             return await YieldHijackRuntime(
                 self._template_root, self._db_session
@@ -850,6 +861,10 @@ class LiteSVMSandboxRuntime(SandboxRuntime):
         ]
 
     async def get_account_state(self, session_id: str, account_ref: str) -> SandboxAccountSnapshot:
+        if await self._is_arbitrary_cpi_session(session_id):
+            return await ArbitraryCPIRuntime(
+                self._template_root, self._db_session
+            ).get_account_state(session_id, account_ref)
         if await self._is_yield_hijack_session(session_id):
             return await YieldHijackRuntime(
                 self._template_root, self._db_session
@@ -946,6 +961,10 @@ class LiteSVMSandboxRuntime(SandboxRuntime):
         )
 
     async def get_explorer_snapshot(self, session_id: str) -> SandboxExplorerSnapshot:
+        if await self._is_arbitrary_cpi_session(session_id):
+            return await ArbitraryCPIRuntime(
+                self._template_root, self._db_session
+            ).get_explorer_snapshot(session_id)
         if await self._is_yield_hijack_session(session_id):
             return await YieldHijackRuntime(
                 self._template_root, self._db_session
@@ -962,6 +981,10 @@ class LiteSVMSandboxRuntime(SandboxRuntime):
     async def submit_transaction(
         self, session_id: str, action_type: str, parameters: dict
     ) -> SandboxTransactionResult:
+        if await self._is_arbitrary_cpi_session(session_id):
+            return await ArbitraryCPIRuntime(
+                self._template_root, self._db_session
+            ).submit_transaction(session_id, action_type, parameters)
         if await self._is_yield_hijack_session(session_id):
             return await YieldHijackRuntime(
                 self._template_root, self._db_session
@@ -1120,6 +1143,12 @@ class LiteSVMSandboxRuntime(SandboxRuntime):
     async def verify_objective(
         self, session_id: str, objective_ref: str
     ) -> SandboxVerificationResult:
+        if await self._is_arbitrary_cpi_session(session_id):
+            if objective_ref != ARBITRARY_CPI_OBJECTIVE_REF:
+                raise NotFoundError("Sandbox objective not found")
+            return await ArbitraryCPIRuntime(
+                self._template_root, self._db_session
+            ).verify_objective(session_id, objective_ref)
         if await self._is_yield_hijack_session(session_id):
             if objective_ref != YIELD_HIJACK_OBJECTIVE_REF:
                 raise NotFoundError("Sandbox objective not found")
@@ -1321,3 +1350,9 @@ class LiteSVMSandboxRuntime(SandboxRuntime):
             return False
         session = await self._db_session.get(ResearchLabSessionModel, session_id)
         return session is not None and session.template_ref == YIELD_HIJACK_TEMPLATE_REF
+
+    async def _is_arbitrary_cpi_session(self, session_id: str) -> bool:
+        if self._db_session is None:
+            return False
+        session = await self._db_session.get(ResearchLabSessionModel, session_id)
+        return session is not None and session.template_ref == ARBITRARY_CPI_TEMPLATE_REF

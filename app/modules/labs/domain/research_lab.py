@@ -232,4 +232,71 @@ RL2_YIELD_HIJACK_MANIFEST = ResearchLabManifest(
 )
 
 
-RESEARCH_LABS = [RL1_ACCOUNT_SUBSTITUTION_MANIFEST, RL2_YIELD_HIJACK_MANIFEST]
+RL3_ARBITRARY_CPI_MANIFEST = ResearchLabManifest(
+    id="rl3-arbitrary-cpi",
+    version="1.0.0",
+    slug="arbitrary-cpi",
+    aliases=["rl-003", "arbitrary-cpi"],
+    lab_code="RL3",
+    title="Arbitrary CPI",
+    difficulty="advanced",
+    estimated_time="60-90 minutes",
+    xp_reward=350,
+    status="active",
+    summary=(
+        "Inspect a TaskBounty payout flow and prove whether a caller-supplied CPI target "
+        "can replace the approved payout router and drain escrowed task rewards."
+    ),
+    scenario_briefing=(
+        "A bounty platform delegates payout execution after a worker completes a task. "
+        "Your job is to inspect the public program interface, build and deploy a controlled "
+        "session-scoped attacker program inside the SolBreach sandbox, then prove whether "
+        "the vulnerable delegated payout instruction accepts that attacker program as the CPI target."
+    ),
+    objective=(
+        "Prove that arbitrary CPI target selection lets a caller replace the approved payout "
+        "router with a session-scoped attacker program and drain task escrow into the attacker "
+        "reward account."
+    ),
+    allowed_files=["programs/task_bounty/src/lib.rs"],
+    entry_file="programs/task_bounty/src/lib.rs",
+    test_command="",
+    template_ref="research-labs/arbitrary-cpi@v1",
+    objective_ref="RL3_ARBITRARY_CPI_BOUNTY_DRAIN_IMPACT",
+    visible_account_refs=[
+        "bounty_config",
+        "bounty_authority",
+        "bounty_vault",
+        "task_record",
+        "task_escrow",
+        "official_payout_router",
+        "approved_worker_account",
+        "attacker_reward_account",
+        "attacker_program_buffer",
+    ],
+    objectives=[
+        "Inspect the delegated payout program interface",
+        "Build a controlled attacker CPI program inside the sandbox",
+        "Deploy the session-scoped attacker program",
+        "Execute delegated payout with the attacker CPI target and prove escrow impact",
+    ],
+    hints=[
+        ResearchLabHint(
+            id="public-idl",
+            title="Hint 1",
+            body="Find the delegated payout instruction through the public IDL, not through the reward candidate data.",
+        ),
+        ResearchLabHint(
+            id="cpi-target",
+            title="Hint 2",
+            body="Focus on whether the payout instruction binds the CPI target to the approved router.",
+        ),
+    ],
+)
+
+
+RESEARCH_LABS = [
+    RL1_ACCOUNT_SUBSTITUTION_MANIFEST,
+    RL2_YIELD_HIJACK_MANIFEST,
+    RL3_ARBITRARY_CPI_MANIFEST,
+]
