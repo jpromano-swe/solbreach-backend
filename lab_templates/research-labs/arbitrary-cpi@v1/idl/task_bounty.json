@@ -15,6 +15,10 @@
       "args": []
     },
     {
+      "name": "execute",
+      "args": []
+    },
+    {
       "name": "execute_delegated_payout",
       "args": []
     }

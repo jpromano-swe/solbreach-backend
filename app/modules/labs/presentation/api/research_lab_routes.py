@@ -260,6 +260,24 @@ async def get_research_lab_explorer(
 
 
 @router.get(
+    "/sessions/{session_id}/scope",
+    response_model=ResearchLabAPIResponse,
+    summary="Get Research Lab task scope",
+    description="Returns session-owned task/category scope metadata for supported labs.",
+)
+async def get_research_lab_scope(
+    session_id: str,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+    runtime: SandboxRuntime = Depends(get_sandbox_runtime),
+    settings: Settings = Depends(get_settings),
+) -> ResearchLabAPIResponse:
+    data = await _service(session, runtime, settings).get_scope(current_user, session_id)
+    await session.commit()
+    return ResearchLabAPIResponse(data=data)
+
+
+@router.get(
     "/sessions/{session_id}/accounts",
     response_model=ResearchLabAPIResponse,
     summary="List visible Research Lab accounts",

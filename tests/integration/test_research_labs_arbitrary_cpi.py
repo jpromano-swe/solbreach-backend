@@ -31,8 +31,11 @@ async def _build_attacker_program(client: AsyncClient, headers: dict[str, str], 
         json={
             "action_type": "BUILD_ATTACKER_PROGRAM",
             "parameters": {
+                "task_ref": "design_ops_console",
+                "category_ref": "design",
                 "program_template": "cpi_drain_router",
                 "entrypoint_name": "execute",
+                "transfer_function": "transfer_checked",
                 "transfer_source_ref": "task_escrow",
                 "transfer_destination_ref": "attacker_reward_account",
                 "authority_strategy": "reuse_delegated_signer",
@@ -59,7 +62,7 @@ async def _submit_delegation(client: AsyncClient, headers: dict[str, str], sessi
         json={
             "action_type": "SUBMIT_DELEGATION",
             "parameters": {
-                "task_ref": "task_record",
+                "task_ref": "design_ops_console",
                 "delegate_program_ref": "official_payout_router",
                 "reward_amount": 75_000,
             },
@@ -72,14 +75,16 @@ async def _execute_cpi(
     headers: dict[str, str],
     session_id: str,
     *,
-    instruction_name: str | None = "execute_delegated_payout",
+    instruction_name: str | None = "execute",
     delegate_program_ref: str = "attacker_cpi_program",
+    task_ref: str = "design_ops_console",
+    amount: int = 75_000,
 ):
     parameters = {
-        "task_ref": "task_record",
+        "task_ref": task_ref,
         "delegate_program_ref": delegate_program_ref,
         "destination_account_ref": "attacker_reward_account",
-        "amount": 75_000,
+        "amount": amount,
     }
     if instruction_name is not None:
         parameters["instruction_name"] = instruction_name
@@ -117,6 +122,144 @@ def _accepted_rl3_report_fields(verified_evidence_refs: list[str]) -> dict:
     }
 
 
+async def test_rl3_task_scope_rejects_invalid_and_v2_paths(
+    seeded_client: AsyncClient,
+) -> None:
+    await _register_user(seeded_client, "rl3-contract@example.com")
+    token = await _login_token(seeded_client, "rl3-contract@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+    session_id = await _create_rl3_session(seeded_client, headers)
+
+    deploy_without_artifact = await _deploy_attacker_program(seeded_client, headers, session_id)
+    assert deploy_without_artifact.status_code == 200
+    assert deploy_without_artifact.json()["data"]["executionStatus"] == "failure"
+    assert deploy_without_artifact.json()["data"]["protocolState"]["lastRejectedReason"] == (
+        "ATTACKER_PROGRAM_NOT_BUILT"
+    )
+
+    bad_category = await seeded_client.post(
+        f"/api/v1/research-labs/sessions/{session_id}/transactions",
+        headers=headers,
+        json={
+            "action_type": "BUILD_ATTACKER_PROGRAM",
+            "parameters": {
+                "task_ref": "design_ops_console",
+                "category_ref": "development",
+                "program_template": "cpi_drain_router",
+                "entrypoint_name": "execute",
+                "transfer_function": "transfer_checked",
+                "transfer_source_ref": "task_escrow",
+                "transfer_destination_ref": "attacker_reward_account",
+                "authority_strategy": "reuse_delegated_signer",
+            },
+        },
+    )
+    assert bad_category.status_code == 200
+    assert bad_category.json()["data"]["executionStatus"] == "failure"
+    assert bad_category.json()["data"]["protocolState"]["lastRejectedReason"] == (
+        "TASK_CATEGORY_MISMATCH"
+    )
+
+    v2_build = await seeded_client.post(
+        f"/api/v1/research-labs/sessions/{session_id}/transactions",
+        headers=headers,
+        json={
+            "action_type": "BUILD_ATTACKER_PROGRAM",
+            "parameters": {
+                "task_ref": "development_secure_worker",
+                "category_ref": "development",
+                "program_template": "cpi_drain_router",
+                "entrypoint_name": "execute",
+                "transfer_function": "transfer_checked",
+                "transfer_source_ref": "task_escrow",
+                "transfer_destination_ref": "attacker_reward_account",
+                "authority_strategy": "reuse_delegated_signer",
+            },
+        },
+    )
+    assert v2_build.status_code == 200
+    assert v2_build.json()["data"]["executionStatus"] == "failure"
+    assert v2_build.json()["data"]["protocolState"]["lastRejectedReason"] == (
+        "TASK_TARGET_BINDING_ENFORCED"
+    )
+
+    build = await _build_attacker_program(seeded_client, headers, session_id)
+    assert build.json()["data"]["executionStatus"] == "success"
+    deploy = await _deploy_attacker_program(seeded_client, headers, session_id)
+    assert deploy.json()["data"]["executionStatus"] == "success"
+
+    mismatched_router = await seeded_client.post(
+        f"/api/v1/research-labs/sessions/{session_id}/transactions",
+        headers=headers,
+        json={
+            "action_type": "SUBMIT_DELEGATION",
+            "parameters": {
+                "task_ref": "design_ops_console",
+                "delegate_program_ref": "attacker_cpi_program",
+                "reward_amount": 75_000,
+            },
+        },
+    )
+    assert mismatched_router.status_code == 200
+    assert mismatched_router.json()["data"]["executionStatus"] == "failure"
+    assert mismatched_router.json()["data"]["protocolState"]["lastRejectedReason"] == (
+        "INVALID_DELEGATION_ROUTER"
+    )
+
+    mismatched_amount = await seeded_client.post(
+        f"/api/v1/research-labs/sessions/{session_id}/transactions",
+        headers=headers,
+        json={
+            "action_type": "SUBMIT_DELEGATION",
+            "parameters": {
+                "task_ref": "design_ops_console",
+                "delegate_program_ref": "official_payout_router",
+                "reward_amount": 74_999,
+            },
+        },
+    )
+    assert mismatched_amount.status_code == 200
+    assert mismatched_amount.json()["data"]["executionStatus"] == "failure"
+    assert mismatched_amount.json()["data"]["protocolState"]["lastRejectedReason"] == (
+        "INVALID_REWARD_AMOUNT"
+    )
+
+    delegation = await _submit_delegation(seeded_client, headers, session_id)
+    assert delegation.json()["data"]["executionStatus"] == "success"
+
+    v2_cpi = await _execute_cpi(
+        seeded_client,
+        headers,
+        session_id,
+        task_ref="development_secure_worker",
+        amount=50_000,
+    )
+    assert v2_cpi.status_code == 200
+    assert v2_cpi.json()["data"]["executionStatus"] == "failure"
+    assert v2_cpi.json()["data"]["protocolState"]["lastRejectedReason"] == (
+        "CPI_TARGET_BINDING_ENFORCED"
+    )
+
+    over_drain = await _execute_cpi(seeded_client, headers, session_id, amount=100_000)
+    assert over_drain.status_code == 200
+    assert over_drain.json()["data"]["executionStatus"] == "failure"
+    assert over_drain.json()["data"]["protocolState"]["lastRejectedReason"] == (
+        "INVALID_DRAIN_AMOUNT"
+    )
+
+    legacy_cpi = await _execute_cpi(
+        seeded_client,
+        headers,
+        session_id,
+        instruction_name="execute_delegated_payout",
+        task_ref="task_record",
+    )
+    assert legacy_cpi.status_code == 200
+    assert legacy_cpi.json()["data"]["executionStatus"] == "success"
+    assert legacy_cpi.json()["data"]["parameters"]["task_ref"] == "design_ops_console"
+    assert legacy_cpi.json()["data"]["parameters"]["instruction_name"] == "execute"
+
+
 async def test_rl3_arbitrary_cpi_full_backend_flow(seeded_client: AsyncClient) -> None:
     await _register_user(seeded_client, "rl3-flow@example.com")
     token = await _login_token(seeded_client, "rl3-flow@example.com")
@@ -125,6 +268,21 @@ async def test_rl3_arbitrary_cpi_full_backend_flow(seeded_client: AsyncClient) -
     catalog = (await seeded_client.get("/api/v1/research-labs", headers=headers)).json()["data"]
     assert any(lab["id"] == "rl3-arbitrary-cpi" for lab in catalog)
     session_id = await _create_rl3_session(seeded_client, headers)
+    session_response = await seeded_client.get(
+        f"/api/v1/research-labs/sessions/{session_id}",
+        headers=headers,
+    )
+    assert session_response.status_code == 200
+    assert session_response.json()["data"]["wallet"] == {
+        "wallet_address": None,
+        "walletAddress": None,
+        "display_name": "rl3-flow",
+        "displayName": "rl3-flow",
+        "avatar_url": None,
+        "avatarUrl": None,
+        "available_usdc": 0,
+        "availableUsdc": 0,
+    }
 
     explorer_response = await seeded_client.get(
         f"/api/v1/research-labs/sessions/{session_id}/explorer",
@@ -138,6 +296,7 @@ async def test_rl3_arbitrary_cpi_full_backend_flow(seeded_client: AsyncClient) -
         "create_task",
         "fund_task",
         "delegate_payout",
+        "execute",
         "execute_delegated_payout",
     }
     account_refs = {account["ref"] for account in explorer["accounts"]}
@@ -158,6 +317,37 @@ async def test_rl3_arbitrary_cpi_full_backend_flow(seeded_client: AsyncClient) -
     assert "attacker_cpi_program" not in account_refs
     assert explorer["protocolState"]["bountyPool"]["availableLiquidity"] == 100_000
     assert explorer["protocolState"]["attackerProgram"]["deployed"] is False
+    assert explorer["protocolState"]["selectedTask"]["taskRef"] == "design_ops_console"
+    assert explorer["protocolState"]["selectedTask"]["payoutConfigVersion"] == "V1"
+    assert explorer["protocolState"]["selectedTask"]["targetBindingEnforced"] is False
+    assert {category["category_ref"] for category in explorer["protocolState"]["categories"]} == {
+        "design",
+        "development",
+        "content",
+        "memes",
+    }
+    assert {
+        task["taskRef"]
+        for task in explorer["protocolState"]["tasks"]
+        if task["targetBindingEnforced"]
+    } == {
+        "development_secure_worker",
+        "content_security_brief",
+        "memes_campaign_assets",
+    }
+
+    scope_response = await seeded_client.get(
+        f"/api/v1/research-labs/sessions/{session_id}/scope",
+        headers=headers,
+    )
+    assert scope_response.status_code == 200
+    scope = scope_response.json()["data"]
+    assert scope["wallet"]["display_name"] == "rl3-flow"
+    assert scope["wallet"]["available_usdc"] == 0
+    assert scope["selectedTask"]["taskRef"] == "design_ops_console"
+    assert scope["currentOpportunity"]["taskRef"] == "design_ops_console"
+    assert scope["currentScope"]["taskRef"] == "design_ops_console"
+    assert scope["tasks"][0]["payoutConfigRef"] == "design_payout_config_v1"
 
     early_cpi = await _execute_cpi(seeded_client, headers, session_id)
     assert early_cpi.status_code == 200
@@ -191,8 +381,11 @@ async def test_rl3_arbitrary_cpi_full_backend_flow(seeded_client: AsyncClient) -
         json={
             "action_type": "BUILD_ATTACKER_PROGRAM",
             "parameters": {
+                "task_ref": "design_ops_console",
+                "category_ref": "design",
                 "program_template": "raw_user_code",
                 "entrypoint_name": "execute",
+                "transfer_function": "transfer_checked",
                 "transfer_source_ref": "task_escrow",
                 "transfer_destination_ref": "attacker_reward_account",
                 "authority_strategy": "reuse_delegated_signer",
@@ -210,6 +403,25 @@ async def test_rl3_arbitrary_cpi_full_backend_flow(seeded_client: AsyncClient) -
     build_data = build.json()["data"]
     assert build_data["executionStatus"] == "success"
     assert build_data["parameters"]["artifact_ref"] == "attacker_program_build"
+    assert build_data["parameters"]["task_ref"] == "design_ops_console"
+    assert build_data["parameters"]["category_ref"] == "design"
+    assert build_data["parameters"]["transfer_function"] == "transfer_checked"
+    assert build_data["parameters"]["compile_status"] == "success"
+    assert build_data["parameters"]["build_spec"]["task_ref"] == "design_ops_console"
+    assert build_data["userFacingEvidence"][0]["wallet"]["display_name"] == "rl3-flow"
+    assert build_data["userFacingEvidence"][0]["wallet"]["available_usdc"] == 0
+    assert build_data["userFacingEvidence"][0]["task"]["taskRef"] == "design_ops_console"
+    assert build_data["userFacingEvidence"][0]["currentOpportunity"]["taskRef"] == (
+        "design_ops_console"
+    )
+    assert build_data["userFacingEvidence"][0]["payoutConfig"] == {
+        "ref": "design_payout_config_v1",
+        "version": "V1",
+        "targetBindingEnforced": False,
+    }
+    assert build_data["userFacingEvidence"][0]["evidenceRefs"] == [
+        "artifact:attacker_program_build"
+    ]
     assert build_data["protocolState"]["attackerProgram"]["built"] is True
     assert build_data["protocolState"]["attackerProgram"]["deployed"] is False
 
@@ -260,7 +472,7 @@ async def test_rl3_arbitrary_cpi_full_backend_flow(seeded_client: AsyncClient) -
     assert cpi.status_code == 200
     cpi_data = cpi.json()["data"]
     assert cpi_data["executionStatus"] == "success"
-    assert cpi_data["parameters"]["instruction_name"] == "execute_delegated_payout"
+    assert cpi_data["parameters"]["instruction_name"] == "execute"
     assert cpi_data["parameters"]["delegate_program_ref"] == "attacker_cpi_program"
     state = cpi_data["protocolState"]
     assert state["bountyPool"] == {
@@ -271,7 +483,18 @@ async def test_rl3_arbitrary_cpi_full_backend_flow(seeded_client: AsyncClient) -
     assert state["task"]["status"] == "drained"
     assert state["task"]["escrowBalance"] == 0
     assert state["attacker"]["rewardBalance"] == 75_000
+    assert state["wallet"]["available_usdc"] == 75_000
+    assert cpi_data["userFacingEvidence"][0]["wallet"]["available_usdc"] == 75_000
+    assert cpi_data["userFacingEvidence"][0]["instructionName"] == "execute"
     assert state["cpi"]["targetReplaced"] is True
+
+    post_cpi_scope = (
+        await seeded_client.get(
+            f"/api/v1/research-labs/sessions/{session_id}/scope",
+            headers=headers,
+        )
+    ).json()["data"]
+    assert post_cpi_scope["wallet"]["available_usdc"] == 75_000
 
     verified = await seeded_client.post(
         f"/api/v1/research-labs/sessions/{session_id}/verify-objective",

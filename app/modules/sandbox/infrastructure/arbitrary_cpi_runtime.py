@@ -28,6 +28,7 @@ from app.modules.sandbox.domain.runtime import (
 ARBITRARY_CPI_TEMPLATE_REF = "research-labs/arbitrary-cpi@v1"
 ARBITRARY_CPI_OBJECTIVE_REF = "RL3_ARBITRARY_CPI_BOUNTY_DRAIN_IMPACT"
 CANONICAL_EXECUTE_DELEGATED_PAYOUT = "execute_delegated_payout"
+CANONICAL_EXECUTE_INSTRUCTION = "execute"
 
 BOUNTY_TOTAL_ESCROWED = 100_000
 TASK_REWARD_AMOUNT = 75_000
@@ -36,8 +37,115 @@ ATTACKER_PROGRAM_REF = "attacker_cpi_program"
 ATTACKER_PROGRAM_TEMPLATE = "cpi_drain_router"
 ATTACKER_ENTRYPOINT = "execute"
 ATTACKER_AUTHORITY_STRATEGY = "reuse_delegated_signer"
+TRANSFER_FUNCTION = "transfer_checked"
 TOKEN_PROGRAM_ID = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
 SYSTEM_PROGRAM_ID = "11111111111111111111111111111111"
+DESIGN_TASK_REF = "design_ops_console"
+LEGACY_TASK_REF = "task_record"
+
+RL3_CATEGORIES = [
+    {"ref": "design", "category_ref": "design", "categoryRef": "design", "label": "Design"},
+    {
+        "ref": "development",
+        "category_ref": "development",
+        "categoryRef": "development",
+        "label": "Development",
+    },
+    {"ref": "content", "category_ref": "content", "categoryRef": "content", "label": "Content"},
+    {
+        "ref": "memes",
+        "category_ref": "memes",
+        "categoryRef": "memes",
+        "label": "Memes Creation",
+    },
+]
+
+RL3_TASKS = [
+    {
+        "task_ref": DESIGN_TASK_REF,
+        "taskRef": DESIGN_TASK_REF,
+        "category_ref": "design",
+        "categoryRef": "design",
+        "categoryLabel": "Design",
+        "title": "Design the auditor operations console",
+        "reward_amount": TASK_REWARD_AMOUNT,
+        "rewardAmount": TASK_REWARD_AMOUNT,
+        "escrow_account_ref": "task_escrow",
+        "escrowAccountRef": "task_escrow",
+        "payout_config_ref": "design_payout_config_v1",
+        "payoutConfigRef": "design_payout_config_v1",
+        "payout_config_version": "V1",
+        "payoutConfigVersion": "V1",
+        "approved_router_ref": "official_payout_router",
+        "approvedRouterRef": "official_payout_router",
+        "target_binding_enforced": False,
+        "targetBindingEnforced": False,
+        "status": "open",
+    },
+    {
+        "task_ref": "development_secure_worker",
+        "taskRef": "development_secure_worker",
+        "category_ref": "development",
+        "categoryRef": "development",
+        "categoryLabel": "Development",
+        "title": "Patch the payout worker",
+        "reward_amount": 50_000,
+        "rewardAmount": 50_000,
+        "escrow_account_ref": "development_task_escrow",
+        "escrowAccountRef": "development_task_escrow",
+        "payout_config_ref": "development_payout_config_v2",
+        "payoutConfigRef": "development_payout_config_v2",
+        "payout_config_version": "V2",
+        "payoutConfigVersion": "V2",
+        "approved_router_ref": "official_payout_router",
+        "approvedRouterRef": "official_payout_router",
+        "target_binding_enforced": True,
+        "targetBindingEnforced": True,
+        "status": "open",
+    },
+    {
+        "task_ref": "content_security_brief",
+        "taskRef": "content_security_brief",
+        "category_ref": "content",
+        "categoryRef": "content",
+        "categoryLabel": "Content",
+        "title": "Write the launch security brief",
+        "reward_amount": 25_000,
+        "rewardAmount": 25_000,
+        "escrow_account_ref": "content_task_escrow",
+        "escrowAccountRef": "content_task_escrow",
+        "payout_config_ref": "content_payout_config_v2",
+        "payoutConfigRef": "content_payout_config_v2",
+        "payout_config_version": "V2",
+        "payoutConfigVersion": "V2",
+        "approved_router_ref": "official_payout_router",
+        "approvedRouterRef": "official_payout_router",
+        "target_binding_enforced": True,
+        "targetBindingEnforced": True,
+        "status": "open",
+    },
+    {
+        "task_ref": "memes_campaign_assets",
+        "taskRef": "memes_campaign_assets",
+        "category_ref": "memes",
+        "categoryRef": "memes",
+        "categoryLabel": "Memes Creation",
+        "title": "Create bounty launch meme assets",
+        "reward_amount": 10_000,
+        "rewardAmount": 10_000,
+        "escrow_account_ref": "memes_task_escrow",
+        "escrowAccountRef": "memes_task_escrow",
+        "payout_config_ref": "memes_payout_config_v2",
+        "payoutConfigRef": "memes_payout_config_v2",
+        "payout_config_version": "V2",
+        "payoutConfigVersion": "V2",
+        "approved_router_ref": "official_payout_router",
+        "approvedRouterRef": "official_payout_router",
+        "target_binding_enforced": True,
+        "targetBindingEnforced": True,
+        "status": "open",
+    },
+]
 
 RL3_ACCOUNT_LABELS = {
     "bounty_config": "Bounty Configuration",
@@ -68,6 +176,10 @@ BASE_VISIBLE_REFS = [
 @dataclass(slots=True)
 class ArbitraryCPIState:
     bounty_pool: dict
+    categories: list[dict]
+    tasks: list[dict]
+    selected_task: dict | None
+    phase: str
     task: dict
     user: dict
     attacker: dict
@@ -172,6 +284,8 @@ class ArbitraryCPIMaterializer:
         bounty_available = BOUNTY_TOTAL_ESCROWED
         bounty_paid_out = 0
         attacker_reward_balance = 0
+        selected_task_ref: str | None = None
+        phase = "task_selected"
         successful_builds: list[dict] = []
         successful_deployments: list[dict] = []
         successful_delegations: list[dict] = []
@@ -183,21 +297,33 @@ class ArbitraryCPIMaterializer:
             sequence_number = getattr(tx_model, "sequence_number", 0)
             if action == "BUILD_ATTACKER_PROGRAM":
                 program_built = True
+                selected_task_ref = _normalize_task_ref(params.get("task_ref"))
+                phase = "built"
                 successful_builds.append(
                     {
                         "transactionRef": tx_model.transaction_ref,
                         "sequenceNumber": sequence_number,
+                        "taskRef": selected_task_ref,
+                        "categoryRef": params.get("category_ref"),
                         "programTemplate": params.get("program_template"),
                         "entrypointName": params.get("entrypoint_name"),
+                        "transferFunction": params.get("transfer_function"),
+                        "transferSourceRef": params.get("transfer_source_ref"),
+                        "transferDestinationRef": params.get("transfer_destination_ref"),
+                        "authorityStrategy": params.get("authority_strategy"),
                         "artifactRef": params.get("artifact_ref", ATTACKER_PROGRAM_ARTIFACT_REF),
+                        "buildSpec": params.get("build_spec"),
+                        "compileStatus": params.get("compile_status"),
                     }
                 )
             elif action == "DEPLOY_ATTACKER_PROGRAM":
                 program_deployed = True
+                phase = "deployed"
                 successful_deployments.append(
                     {
                         "transactionRef": tx_model.transaction_ref,
                         "sequenceNumber": sequence_number,
+                        "artifactRef": params.get("artifact_ref", ATTACKER_PROGRAM_ARTIFACT_REF),
                         "programRef": params.get("program_ref", ATTACKER_PROGRAM_REF),
                         "programAddress": params.get(
                             "program_address", str(self.attacker_program_address)
@@ -206,13 +332,15 @@ class ArbitraryCPIMaterializer:
                 )
             elif action == "SUBMIT_DELEGATION":
                 normal_delegation_submitted = True
+                selected_task_ref = _normalize_task_ref(params.get("task_ref"))
                 delegated_program = str(params.get("delegate_program_ref") or "official_payout_router")
                 task_status = "delegated"
+                phase = "payout_authorized"
                 successful_delegations.append(
                     {
                         "transactionRef": tx_model.transaction_ref,
                         "sequenceNumber": sequence_number,
-                        "taskRef": params.get("task_ref"),
+                        "taskRef": selected_task_ref,
                         "delegateProgramRef": delegated_program,
                         "rewardAmount": int(params.get("executed_amount") or params.get("reward_amount") or 0),
                     }
@@ -221,6 +349,7 @@ class ArbitraryCPIMaterializer:
                 amount = int(params.get("executed_amount") or params.get("amount") or 0)
                 if amount <= 0:
                     continue
+                selected_task_ref = _normalize_task_ref(params.get("task_ref"))
                 executed_target = str(params.get("delegate_program_ref") or ATTACKER_PROGRAM_REF)
                 delegated_program = executed_target
                 bounty_paid_out += amount
@@ -228,10 +357,12 @@ class ArbitraryCPIMaterializer:
                 attacker_reward_balance += amount
                 task_escrow_balance = max(task_escrow_balance - amount, 0)
                 task_status = "drained" if task_escrow_balance == 0 else "partially_drained"
+                phase = "impact_verified" if task_escrow_balance == 0 else "cpi_executed"
                 successful_executions.append(
                     {
                         "transactionRef": tx_model.transaction_ref,
                         "sequenceNumber": sequence_number,
+                        "taskRef": selected_task_ref,
                         "instructionName": params.get("instruction_name"),
                         "delegateProgramRef": executed_target,
                         "destinationAccountRef": params.get("destination_account_ref"),
@@ -244,14 +375,33 @@ class ArbitraryCPIMaterializer:
             "availableLiquidity": bounty_available,
             "paidOut": bounty_paid_out,
         }
+        selected_task = _task_for_ref(selected_task_ref or DESIGN_TASK_REF)
         task = {
             "taskId": "task-security-review-001",
+            "task_ref": selected_task["task_ref"],
+            "taskRef": selected_task["task_ref"],
+            "category_ref": selected_task["category_ref"],
+            "categoryRef": selected_task["category_ref"],
+            "categoryLabel": selected_task["categoryLabel"],
+            "title": selected_task["title"],
             "status": task_status,
-            "rewardAmount": TASK_REWARD_AMOUNT,
-            "approvedDelegateProgram": "official_payout_router",
+            "reward_amount": selected_task["reward_amount"],
+            "rewardAmount": selected_task["reward_amount"],
+            "escrow_account_ref": selected_task["escrow_account_ref"],
+            "escrowAccountRef": selected_task["escrow_account_ref"],
+            "payout_config_ref": selected_task["payout_config_ref"],
+            "payoutConfigRef": selected_task["payout_config_ref"],
+            "payout_config_version": selected_task["payout_config_version"],
+            "payoutConfigVersion": selected_task["payout_config_version"],
+            "approved_router_ref": selected_task["approved_router_ref"],
+            "approvedRouterRef": selected_task["approved_router_ref"],
+            "target_binding_enforced": selected_task["target_binding_enforced"],
+            "targetBindingEnforced": selected_task["target_binding_enforced"],
+            "approvedDelegateProgram": selected_task["approved_router_ref"],
             "delegatedProgram": delegated_program,
             "escrowBalance": task_escrow_balance,
         }
+        tasks = [_task_with_runtime_status(item, task) for item in RL3_TASKS]
         user = {
             "wallet": str(self.attacker_wallet),
             "normalDelegationSubmitted": normal_delegation_submitted,
@@ -272,6 +422,10 @@ class ArbitraryCPIMaterializer:
         }
         return ArbitraryCPIState(
             bounty_pool=bounty_pool,
+            categories=RL3_CATEGORIES,
+            tasks=tasks,
+            selected_task=task,
+            phase=phase,
             task=task,
             user=user,
             attacker=attacker,
@@ -417,6 +571,32 @@ class ArbitraryCPIRuntime:
                     "type": "transaction_result" if success else "rejected_transaction",
                     "summary": "Transaction submitted." if success else _failure_summary(failure_code),
                     "errorCode": failure_code,
+                    "task": protocol_state.get("selectedTask"),
+                    "currentOpportunity": protocol_state.get("currentOpportunity"),
+                    "phase": protocol_state.get("phase"),
+                    "payoutConfig": {
+                        "ref": (protocol_state.get("selectedTask") or {}).get("payoutConfigRef"),
+                        "version": (protocol_state.get("selectedTask") or {}).get(
+                            "payoutConfigVersion"
+                        ),
+                        "targetBindingEnforced": (protocol_state.get("selectedTask") or {}).get(
+                            "targetBindingEnforced"
+                        ),
+                    },
+                    "buildArtifact": protocol_state.get("attackerProgram", {}).get("artifactRef"),
+                    "buildSpec": params.get("build_spec"),
+                    "compileStatus": params.get("compile_status"),
+                    "compileLogs": params.get("compile_logs"),
+                    "deployedProgram": protocol_state.get("attackerProgram", {}).get("programRef"),
+                    "deployedProgramAddress": protocol_state.get("attackerProgram", {}).get(
+                        "programAddress"
+                    ),
+                    "executedTarget": protocol_state.get("cpi", {}).get("executedTarget"),
+                    "instructionName": params.get("instruction_name"),
+                    "accountDeltas": _build_deltas(before, after) if success else [],
+                    "evidenceRefs": [f"artifact:{ATTACKER_PROGRAM_ARTIFACT_REF}"]
+                    if success and action == "BUILD_ATTACKER_PROGRAM"
+                    else [],
                 }
             ],
         )
@@ -439,8 +619,9 @@ class ArbitraryCPIRuntime:
                 if tx.execution_status == "success"
                 and tx.instruction_type == "EXECUTE_DELEGATED_CPI"
                 and (tx.parameters_json or {}).get("instruction_name")
-                == CANONICAL_EXECUTE_DELEGATED_PAYOUT
+                in {CANONICAL_EXECUTE_INSTRUCTION, CANONICAL_EXECUTE_DELEGATED_PAYOUT}
                 and (tx.parameters_json or {}).get("delegate_program_ref") == ATTACKER_PROGRAM_REF
+                and _normalize_task_ref((tx.parameters_json or {}).get("task_ref")) == DESIGN_TASK_REF
             ),
             None,
         )
@@ -449,6 +630,8 @@ class ArbitraryCPIRuntime:
             "attackerProgramDeployed": state.attacker["programDeployed"],
             "normalDelegationSubmitted": state.user["normalDelegationSubmitted"],
             "canonicalInstructionUsed": successful_cpi is not None,
+            "designV1TaskSelected": state.task["taskRef"] == DESIGN_TASK_REF
+            and state.task["payoutConfigVersion"] == "V1",
             "attackerProgramTargeted": state.cpi["executedTarget"] == ATTACKER_PROGRAM_REF,
             "officialRouterBypassed": state.cpi["targetReplaced"],
             "taskEscrowDrained": state.task["escrowBalance"] == 0,
@@ -531,6 +714,53 @@ class ArbitraryCPIRuntime:
         return idl
 
 
+def _normalize_task_ref(task_ref: object) -> str:
+    if task_ref in (None, "", LEGACY_TASK_REF, DESIGN_TASK_REF):
+        return DESIGN_TASK_REF
+    return str(task_ref)
+
+
+def _task_for_ref(task_ref: object) -> dict:
+    normalized_ref = _normalize_task_ref(task_ref)
+    for task in RL3_TASKS:
+        if task["task_ref"] == normalized_ref:
+            return dict(task)
+    raise KeyError(normalized_ref)
+
+
+def _resolve_task(params: dict) -> tuple[dict | None, str | None, list[str]]:
+    task_ref = _normalize_task_ref(params.get("task_ref"))
+    try:
+        task = _task_for_ref(task_ref)
+    except KeyError:
+        return None, "UNKNOWN_TASK_REF", ["Task does not exist in this sandbox session."]
+    category_ref = params.get("category_ref")
+    if category_ref not in (None, "", task["category_ref"]):
+        return None, "TASK_CATEGORY_MISMATCH", ["Task does not belong to the selected category."]
+    return task, None, []
+
+
+def _canonicalize_task_params(params: dict, task: dict) -> None:
+    params["task_ref"] = task["task_ref"]
+    params["category_ref"] = task["category_ref"]
+    params["payout_config_ref"] = task["payout_config_ref"]
+    params["payout_config_version"] = task["payout_config_version"]
+    params["target_binding_enforced"] = task["target_binding_enforced"]
+    params["approved_router_ref"] = task["approved_router_ref"]
+
+
+def _task_with_runtime_status(task: dict, active_task: dict) -> dict:
+    item = dict(task)
+    if task["task_ref"] == active_task["task_ref"]:
+        item["status"] = active_task["status"]
+        item["escrowBalance"] = active_task["escrowBalance"]
+        item["delegatedProgram"] = active_task["delegatedProgram"]
+    else:
+        item["escrowBalance"] = task["reward_amount"]
+        item["delegatedProgram"] = task["approved_router_ref"]
+    return item
+
+
 def _visible_refs(state: ArbitraryCPIState) -> list[str]:
     refs = list(BASE_VISIBLE_REFS)
     if state.attacker["programDeployed"]:
@@ -606,7 +836,8 @@ def _account_data(ref: str, state: ArbitraryCPIState, mat: ArbitraryCPIMateriali
     if ref == "task_escrow":
         return {
             "amount": state.task["escrowBalance"],
-            "taskRef": "task_record",
+            "taskRef": state.task["taskRef"],
+            "legacyTaskRef": LEGACY_TASK_REF,
             "mintSymbol": "USDC",
         }
     if ref == "official_payout_router":
@@ -633,23 +864,54 @@ def _account_data(ref: str, state: ArbitraryCPIState, mat: ArbitraryCPIMateriali
             "programAddress": state.attacker["programAddress"],
             "template": ATTACKER_PROGRAM_TEMPLATE,
             "entrypoint": ATTACKER_ENTRYPOINT,
+            "artifactRef": ATTACKER_PROGRAM_ARTIFACT_REF,
             "sessionScoped": True,
         }
     return {}
 
 
 def _execute_build(params: dict) -> tuple[bool, str | None, list[str], dict]:
+    task, task_error, task_logs = _resolve_task(params)
+    if task is None:
+        return False, task_error, task_logs, params
+    if task["target_binding_enforced"]:
+        return (
+            False,
+            "TASK_TARGET_BINDING_ENFORCED",
+            ["Selected task uses Config V2 and does not allow caller-supplied CPI targets."],
+            params,
+        )
     if params.get("program_template") != ATTACKER_PROGRAM_TEMPLATE:
         return False, "INVALID_PROGRAM_TEMPLATE", ["Invalid attacker program template."], params
     if params.get("entrypoint_name") != ATTACKER_ENTRYPOINT:
         return False, "INVALID_ENTRYPOINT", ["Invalid attacker program entrypoint."], params
+    transfer_function = params.get("transfer_function") or TRANSFER_FUNCTION
+    if transfer_function != TRANSFER_FUNCTION:
+        return False, "INVALID_TRANSFER_FUNCTION", ["Invalid token transfer function."], params
     if params.get("transfer_source_ref") != "task_escrow":
         return False, "INVALID_TRANSFER_SOURCE", ["Invalid transfer source account."], params
     if params.get("transfer_destination_ref") != "attacker_reward_account":
         return False, "INVALID_TRANSFER_DESTINATION", ["Invalid transfer destination account."], params
     if params.get("authority_strategy") != ATTACKER_AUTHORITY_STRATEGY:
         return False, "INVALID_AUTHORITY_STRATEGY", ["Invalid authority strategy."], params
+    _canonicalize_task_params(params, task)
+    params["transfer_function"] = TRANSFER_FUNCTION
     params["artifact_ref"] = ATTACKER_PROGRAM_ARTIFACT_REF
+    params["compile_status"] = "success"
+    params["compile_logs"] = [
+        "Template cpi_drain_router selected from SolBreach safe program registry.",
+        "Deterministic session artifact compiled for the selected Design V1 task.",
+    ]
+    params["build_spec"] = {
+        "task_ref": task["task_ref"],
+        "category_ref": task["category_ref"],
+        "program_template": ATTACKER_PROGRAM_TEMPLATE,
+        "entrypoint_name": ATTACKER_ENTRYPOINT,
+        "transfer_function": TRANSFER_FUNCTION,
+        "transfer_source_ref": "task_escrow",
+        "transfer_destination_ref": "attacker_reward_account",
+        "authority_strategy": ATTACKER_AUTHORITY_STRATEGY,
+    }
     return (
         True,
         None,
@@ -666,12 +928,18 @@ def _execute_deploy(
 ) -> tuple[bool, str | None, list[str], dict]:
     if not state.attacker["programBuilt"]:
         return False, "ATTACKER_PROGRAM_NOT_BUILT", ["Build attacker program first."], params
-    if state.attacker["programDeployed"]:
-        return False, "ATTACKER_PROGRAM_ALREADY_DEPLOYED", ["Attacker program already deployed."], params
     if params.get("artifact_ref") != ATTACKER_PROGRAM_ARTIFACT_REF:
         return False, "INVALID_ARTIFACT_REF", ["Invalid attacker program artifact."], params
     params["program_ref"] = ATTACKER_PROGRAM_REF
     params["program_address"] = str(mat.attacker_program_address)
+    params["session_scoped"] = True
+    if state.attacker["programDeployed"]:
+        return (
+            True,
+            None,
+            ["Attacker program is already deployed for this session; returning existing program."],
+            params,
+        )
     return (
         True,
         None,
@@ -686,15 +954,29 @@ def _execute_deploy(
 def _execute_delegation(
     state: ArbitraryCPIState, params: dict
 ) -> tuple[bool, str | None, list[str], dict]:
-    if state.user["normalDelegationSubmitted"]:
-        return False, "DELEGATION_ALREADY_SUBMITTED", ["Delegation already submitted."], params
-    required_refs = {"task_ref": "task_record", "delegate_program_ref": "official_payout_router"}
-    ref_error = _validate_refs(params, required_refs)
-    if ref_error is not None:
-        return False, ref_error, ["Invalid delegation account reference."], params
+    task, task_error, task_logs = _resolve_task(params)
+    if task is None:
+        return False, task_error, task_logs, params
+    delegate_ref = params.get("delegate_program_ref")
+    if delegate_ref != task["approved_router_ref"]:
+        return (
+            False,
+            "INVALID_DELEGATION_ROUTER",
+            ["Delegation must target the approved router."],
+            params,
+        )
     amount = int(params.get("reward_amount") or 0)
-    if amount != TASK_REWARD_AMOUNT:
+    if amount != task["reward_amount"]:
         return False, "INVALID_REWARD_AMOUNT", ["Delegation amount must match the task reward."], params
+    _canonicalize_task_params(params, task)
+    if state.user["normalDelegationSubmitted"]:
+        params["executed_amount"] = amount
+        return (
+            True,
+            None,
+            ["Task payout authorization already exists; returning current authorization."],
+            params,
+        )
     params["executed_amount"] = amount
     return (
         True,
@@ -711,7 +993,7 @@ def _execute_cpi(state: ArbitraryCPIState, params: dict) -> tuple[bool, str | No
     instruction_name = params.get("instruction_name")
     if not instruction_name:
         return False, "INSTRUCTION_NAME_REQUIRED", ["Instruction name is required."], params
-    if instruction_name != CANONICAL_EXECUTE_DELEGATED_PAYOUT:
+    if instruction_name not in {CANONICAL_EXECUTE_INSTRUCTION, CANONICAL_EXECUTE_DELEGATED_PAYOUT}:
         return (
             False,
             "INVALID_INSTRUCTION_NAME",
@@ -722,13 +1004,11 @@ def _execute_cpi(state: ArbitraryCPIState, params: dict) -> tuple[bool, str | No
         return False, "DELEGATION_REQUIRED", ["Submit the normal delegation first."], params
     if not state.attacker["programDeployed"]:
         return False, "ATTACKER_PROGRAM_NOT_DEPLOYED", ["Deploy attacker program first."], params
-    required_refs = {
-        "task_ref": "task_record",
-        "destination_account_ref": "attacker_reward_account",
-    }
-    ref_error = _validate_refs(params, required_refs)
-    if ref_error is not None:
-        return False, ref_error, ["Invalid CPI account reference."], params
+    task, task_error, task_logs = _resolve_task(params)
+    if task is None:
+        return False, task_error, task_logs, params
+    if params.get("destination_account_ref") != "attacker_reward_account":
+        return False, "INVALID_ACCOUNT_REF", ["Invalid CPI account reference."], params
     delegate_ref = params.get("delegate_program_ref")
     if delegate_ref == "official_payout_router":
         return (
@@ -739,9 +1019,18 @@ def _execute_cpi(state: ArbitraryCPIState, params: dict) -> tuple[bool, str | No
         )
     if delegate_ref != ATTACKER_PROGRAM_REF:
         return False, "INVALID_CPI_TARGET", ["CPI target must be the deployed attacker program."], params
+    if task["target_binding_enforced"]:
+        return (
+            False,
+            "CPI_TARGET_BINDING_ENFORCED",
+            ["Selected task uses Config V2 and rejects caller-supplied CPI targets."],
+            params,
+        )
     amount = int(params.get("amount") or 0)
-    if amount != TASK_REWARD_AMOUNT or amount > state.task["escrowBalance"]:
+    if amount != task["reward_amount"] or amount > state.task["escrowBalance"]:
         return False, "INVALID_DRAIN_AMOUNT", ["Drain amount must match available task escrow."], params
+    _canonicalize_task_params(params, task)
+    params["instruction_name"] = CANONICAL_EXECUTE_INSTRUCTION
     params["executed_amount"] = amount
     return (
         True,
@@ -765,14 +1054,19 @@ def _failure_summary(code: str | None) -> str:
     return {
         "INVALID_PROGRAM_TEMPLATE": "Attacker program template is not supported.",
         "INVALID_ENTRYPOINT": "Attacker program entrypoint is not supported.",
+        "INVALID_TRANSFER_FUNCTION": "Token transfer function is not supported.",
         "INVALID_TRANSFER_SOURCE": "Transfer source must be the task escrow.",
         "INVALID_TRANSFER_DESTINATION": "Transfer destination must be the attacker reward account.",
         "INVALID_AUTHORITY_STRATEGY": "Authority strategy is not supported.",
+        "UNKNOWN_TASK_REF": "Task does not exist in this sandbox session.",
+        "TASK_CATEGORY_MISMATCH": "Selected task does not belong to the selected category.",
+        "TASK_TARGET_BINDING_ENFORCED": "Selected task uses Config V2 target binding.",
         "ATTACKER_PROGRAM_NOT_BUILT": "Build attacker program before deployment.",
         "ATTACKER_PROGRAM_ALREADY_DEPLOYED": "Attacker program is already deployed.",
         "INVALID_ARTIFACT_REF": "Deployment artifact is invalid.",
         "DELEGATION_ALREADY_SUBMITTED": "Delegation has already been submitted.",
         "INVALID_ACCOUNT_REF": "One or more account refs do not belong to this action.",
+        "INVALID_DELEGATION_ROUTER": "Delegation router must match the task's approved router.",
         "INVALID_REWARD_AMOUNT": "Delegation reward amount must match the task reward.",
         "INSTRUCTION_NAME_REQUIRED": "Instruction name is required.",
         "INVALID_INSTRUCTION_NAME": "Instruction name does not match the public IDL.",
@@ -780,6 +1074,7 @@ def _failure_summary(code: str | None) -> str:
         "ATTACKER_PROGRAM_NOT_DEPLOYED": "Deploy attacker program before executing the CPI.",
         "OFFICIAL_ROUTER_TARGET_REJECTED": "Official router target does not prove arbitrary CPI impact.",
         "INVALID_CPI_TARGET": "CPI target must be the deployed attacker program.",
+        "CPI_TARGET_BINDING_ENFORCED": "Selected task rejects caller-supplied CPI targets.",
         "INVALID_DRAIN_AMOUNT": "Drain amount must match available task escrow.",
         "UNSUPPORTED_ACTION": "Unsupported sandbox action.",
     }.get(code or "", "Transaction failed.")
@@ -852,16 +1147,33 @@ def _build_deltas(before: ArbitraryCPIState, after: ArbitraryCPIState) -> list[d
 def _protocol_state(state: ArbitraryCPIState) -> dict:
     return {
         "bountyPool": state.bounty_pool,
+        "categories": state.categories,
+        "tasks": state.tasks,
+        "selectedTask": state.selected_task,
+        "currentOpportunity": state.selected_task,
+        "currentScope": state.selected_task,
+        "phase": state.phase,
         "task": state.task,
         "user": state.user,
         "attackerProgram": {
             "built": state.attacker["programBuilt"],
             "deployed": state.attacker["programDeployed"],
+            "artifactRef": state.attacker["buildArtifactRef"],
+            "programRef": state.attacker["programRef"],
             "programAddress": state.attacker["programAddress"],
             "drainDestination": state.attacker["drainDestination"],
         },
         "attacker": state.attacker,
         "cpi": state.cpi,
+        "stateMachine": [
+            "task_selected",
+            "spec_configured",
+            "built",
+            "deployed",
+            "payout_authorized",
+            "cpi_executed",
+            "impact_verified",
+        ],
         "successfulBuilds": state.successful_builds,
         "successfulDeployments": state.successful_deployments,
         "successfulDelegations": state.successful_delegations,

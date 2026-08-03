@@ -377,6 +377,7 @@ class ResearchLabService:
             transaction_count=0,
             report_status=ResearchLabReportStatus.LOCKED.value,
             protocol_state=_initial_protocol_state(manifest),
+            wallet_summary=_wallet_summary(user, _initial_protocol_state(manifest)),
         )
 
     async def get_session(self, user: User, session_id: str) -> dict:
@@ -401,6 +402,7 @@ class ResearchLabService:
             transaction_count=len(transactions),
             report_status=report.status if report is not None else _report_status_for(session),
             protocol_state=latest_protocol_state,
+            wallet_summary=_wallet_summary(user, latest_protocol_state),
         )
 
     async def patch_files(self, user: User, session_id: str, files: list[dict[str, str]]) -> dict:
@@ -532,11 +534,37 @@ class ResearchLabService:
         snapshot = await self._runtime.get_explorer_snapshot(session.id)
         return _explorer_payload(snapshot)
 
+    async def get_scope(self, user: User, session_id: str) -> dict:
+        session = await self._owned_session(user.id, session_id)
+        snapshot = await self._runtime.get_explorer_snapshot(session.id)
+        protocol_state = snapshot.protocol_state or {}
+        return {
+            "session_id": session.id,
+            "sessionId": session.id,
+            "lab_id": session.lab_id,
+            "labId": session.lab_id,
+            "wallet": _wallet_summary(user, protocol_state),
+            "categories": protocol_state.get("categories", []),
+            "tasks": protocol_state.get("tasks", []),
+            "selectedTask": protocol_state.get("selectedTask"),
+            "currentOpportunity": protocol_state.get("currentOpportunity"),
+            "currentScope": protocol_state.get("currentScope"),
+            "attackerProgram": protocol_state.get("attackerProgram", {}),
+            "bountyPool": protocol_state.get("bountyPool", {}),
+            "phase": protocol_state.get("phase"),
+            "protocolState": protocol_state,
+        }
+
     async def submit_transaction(
         self, user: User, session_id: str, action_type: str, parameters: dict
     ) -> dict:
         session = await self._owned_active_session(user.id, session_id)
         result = await self._runtime.submit_transaction(session.id, action_type, parameters)
+        wallet_summary = _wallet_summary(user, result.protocol_state)
+        result.protocol_state["wallet"] = wallet_summary
+        for evidence in result.user_facing_evidence:
+            if isinstance(evidence, dict):
+                evidence["wallet"] = wallet_summary
         idempotency_key = parameters.get("idempotency_key", str(uuid4()))
         evidence_refs = [f"transaction:{result.transaction_ref}"]
         transaction = await self._repository.create_transaction(
@@ -942,6 +970,7 @@ class ResearchLabService:
             transaction_count=0,
             report_status=ResearchLabReportStatus.LOCKED.value,
             protocol_state=_initial_protocol_state(manifest),
+            wallet_summary=_wallet_summary(user, _initial_protocol_state(manifest)),
         )
 
     async def _owned_session(self, user_id: str, session_id: str) -> ResearchLabSessionModel:
@@ -1046,6 +1075,7 @@ def _session_payload(
     report_status: str,
     protocol_state: dict,
     latest_test_run: ResearchLabTestRunModel | None = None,
+    wallet_summary: dict | None = None,
 ) -> dict:
     phase = _phase_for(session, transaction_count=transaction_count)
     report_unlocked = session.impact_verified
@@ -1065,6 +1095,7 @@ def _session_payload(
         "verifiedEvidenceRefs": session.verified_evidence_refs_json,
         "reportUnlocked": report_unlocked,
         "reportStatus": report_status,
+        "wallet": wallet_summary,
         "protocolState": protocol_state,
         "findingReviewPassed": session.finding_review_passed,
         "findingReviewAttempts": session.finding_review_attempts,
@@ -1091,6 +1122,29 @@ def _session_payload(
         ],
         "latest_test_run": _test_run_payload(latest_test_run) if latest_test_run else None,
     }
+
+
+def _wallet_summary(user: User, protocol_state: dict | None = None) -> dict:
+    available_usdc = _lab_available_usdc(protocol_state or {})
+    return {
+        "wallet_address": user.wallet_address,
+        "walletAddress": user.wallet_address,
+        "display_name": user.username,
+        "displayName": user.username,
+        "avatar_url": user.avatar,
+        "avatarUrl": user.avatar,
+        "available_usdc": available_usdc,
+        "availableUsdc": available_usdc,
+    }
+
+
+def _lab_available_usdc(protocol_state: dict) -> int:
+    attacker_state = protocol_state.get("attacker") or {}
+    reward_balance = attacker_state.get("rewardBalance", 0)
+    try:
+        return int(reward_balance or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _phase_for(session: ResearchLabSessionModel, *, transaction_count: int) -> str:
