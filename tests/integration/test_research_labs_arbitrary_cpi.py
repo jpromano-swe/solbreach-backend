@@ -64,7 +64,7 @@ async def _submit_delegation(client: AsyncClient, headers: dict[str, str], sessi
             "parameters": {
                 "task_ref": "design_ops_console",
                 "delegate_program_ref": "official_payout_router",
-                "reward_amount": 75_000,
+                "reward_amount": 750,
             },
         },
     )
@@ -78,7 +78,7 @@ async def _execute_cpi(
     instruction_name: str | None = "execute",
     delegate_program_ref: str = "attacker_cpi_program",
     task_ref: str = "design_ops_console",
-    amount: int = 75_000,
+    amount: int = 750,
 ):
     parameters = {
         "task_ref": task_ref,
@@ -196,7 +196,7 @@ async def test_rl3_task_scope_rejects_invalid_and_v2_paths(
             "parameters": {
                 "task_ref": "design_ops_console",
                 "delegate_program_ref": "attacker_cpi_program",
-                "reward_amount": 75_000,
+                "reward_amount": 750,
             },
         },
     )
@@ -214,7 +214,7 @@ async def test_rl3_task_scope_rejects_invalid_and_v2_paths(
             "parameters": {
                 "task_ref": "design_ops_console",
                 "delegate_program_ref": "official_payout_router",
-                "reward_amount": 74_999,
+                "reward_amount": 749,
             },
         },
     )
@@ -232,7 +232,7 @@ async def test_rl3_task_scope_rejects_invalid_and_v2_paths(
         headers,
         session_id,
         task_ref="development_secure_worker",
-        amount=50_000,
+        amount=1_200,
     )
     assert v2_cpi.status_code == 200
     assert v2_cpi.json()["data"]["executionStatus"] == "failure"
@@ -240,7 +240,7 @@ async def test_rl3_task_scope_rejects_invalid_and_v2_paths(
         "CPI_TARGET_BINDING_ENFORCED"
     )
 
-    over_drain = await _execute_cpi(seeded_client, headers, session_id, amount=100_000)
+    over_drain = await _execute_cpi(seeded_client, headers, session_id, amount=3_000)
     assert over_drain.status_code == 200
     assert over_drain.json()["data"]["executionStatus"] == "failure"
     assert over_drain.json()["data"]["protocolState"]["lastRejectedReason"] == (
@@ -315,7 +315,7 @@ async def test_rl3_arbitrary_cpi_full_backend_flow(seeded_client: AsyncClient) -
     assert "internal_bounty_ledger" not in account_refs
     assert "answer_key" not in account_refs
     assert "attacker_cpi_program" not in account_refs
-    assert explorer["protocolState"]["bountyPool"]["availableLiquidity"] == 100_000
+    assert explorer["protocolState"]["bountyPool"]["availableLiquidity"] == 3_000
     assert explorer["protocolState"]["attackerProgram"]["deployed"] is False
     assert explorer["protocolState"]["selectedTask"]["taskRef"] == "design_ops_console"
     assert explorer["protocolState"]["selectedTask"]["payoutConfigVersion"] == "V1"
@@ -334,6 +334,7 @@ async def test_rl3_arbitrary_cpi_full_backend_flow(seeded_client: AsyncClient) -
         "development_secure_worker",
         "content_security_brief",
         "memes_campaign_assets",
+        "payout_review_plugin",
     }
 
     scope_response = await seeded_client.get(
@@ -354,7 +355,7 @@ async def test_rl3_arbitrary_cpi_full_backend_flow(seeded_client: AsyncClient) -
     early_cpi_data = early_cpi.json()["data"]
     assert early_cpi_data["executionStatus"] == "failure"
     assert early_cpi_data["protocolState"]["lastRejectedReason"] == "DELEGATION_REQUIRED"
-    assert early_cpi_data["protocolState"]["bountyPool"]["availableLiquidity"] == 100_000
+    assert early_cpi_data["protocolState"]["bountyPool"]["availableLiquidity"] == 3_000
     assert early_cpi_data["protocolState"]["attacker"]["rewardBalance"] == 0
 
     missing_instruction = await _execute_cpi(
@@ -432,7 +433,7 @@ async def test_rl3_arbitrary_cpi_full_backend_flow(seeded_client: AsyncClient) -
     assert deploy_data["parameters"]["program_ref"] == "attacker_cpi_program"
     assert deploy_data["parameters"]["program_address"]
     assert deploy_data["protocolState"]["attackerProgram"]["deployed"] is True
-    assert deploy_data["protocolState"]["bountyPool"]["availableLiquidity"] == 100_000
+    assert deploy_data["protocolState"]["bountyPool"]["availableLiquidity"] == 3_000
 
     after_deploy_explorer = (
         await seeded_client.get(
@@ -466,7 +467,7 @@ async def test_rl3_arbitrary_cpi_full_backend_flow(seeded_client: AsyncClient) -
     assert official_target.json()["data"]["protocolState"]["lastRejectedReason"] == (
         "OFFICIAL_ROUTER_TARGET_REJECTED"
     )
-    assert official_target.json()["data"]["protocolState"]["task"]["escrowBalance"] == 75_000
+    assert official_target.json()["data"]["protocolState"]["task"]["escrowBalance"] == 750
 
     cpi = await _execute_cpi(seeded_client, headers, session_id)
     assert cpi.status_code == 200
@@ -476,15 +477,15 @@ async def test_rl3_arbitrary_cpi_full_backend_flow(seeded_client: AsyncClient) -
     assert cpi_data["parameters"]["delegate_program_ref"] == "attacker_cpi_program"
     state = cpi_data["protocolState"]
     assert state["bountyPool"] == {
-        "totalEscrowed": 100_000,
-        "availableLiquidity": 25_000,
-        "paidOut": 75_000,
+        "totalEscrowed": 3_000,
+        "availableLiquidity": 2_250,
+        "paidOut": 750,
     }
-    assert state["task"]["status"] == "drained"
+    assert state["task"]["status"] == "paid"
     assert state["task"]["escrowBalance"] == 0
-    assert state["attacker"]["rewardBalance"] == 75_000
-    assert state["wallet"]["available_usdc"] == 75_000
-    assert cpi_data["userFacingEvidence"][0]["wallet"]["available_usdc"] == 75_000
+    assert state["attacker"]["rewardBalance"] == 750
+    assert state["wallet"]["available_usdc"] == 750
+    assert cpi_data["userFacingEvidence"][0]["wallet"]["available_usdc"] == 750
     assert cpi_data["userFacingEvidence"][0]["instructionName"] == "execute"
     assert state["cpi"]["targetReplaced"] is True
 
@@ -494,7 +495,7 @@ async def test_rl3_arbitrary_cpi_full_backend_flow(seeded_client: AsyncClient) -
             headers=headers,
         )
     ).json()["data"]
-    assert post_cpi_scope["wallet"]["available_usdc"] == 75_000
+    assert post_cpi_scope["wallet"]["available_usdc"] == 750
 
     verified = await seeded_client.post(
         f"/api/v1/research-labs/sessions/{session_id}/verify-objective",

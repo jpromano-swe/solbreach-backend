@@ -30,8 +30,8 @@ ARBITRARY_CPI_OBJECTIVE_REF = "RL3_ARBITRARY_CPI_BOUNTY_DRAIN_IMPACT"
 CANONICAL_EXECUTE_DELEGATED_PAYOUT = "execute_delegated_payout"
 CANONICAL_EXECUTE_INSTRUCTION = "execute"
 
-BOUNTY_TOTAL_ESCROWED = 100_000
-TASK_REWARD_AMOUNT = 75_000
+BOUNTY_TOTAL_ESCROWED = 3_000
+TASK_REWARD_AMOUNT = 750
 ATTACKER_PROGRAM_ARTIFACT_REF = "attacker_program_build"
 ATTACKER_PROGRAM_REF = "attacker_cpi_program"
 ATTACKER_PROGRAM_TEMPLATE = "cpi_drain_router"
@@ -88,9 +88,9 @@ RL3_TASKS = [
         "category_ref": "development",
         "categoryRef": "development",
         "categoryLabel": "Development",
-        "title": "Patch the payout worker",
-        "reward_amount": 50_000,
-        "rewardAmount": 50_000,
+        "title": "Development analytics",
+        "reward_amount": 1_200,
+        "rewardAmount": 1_200,
         "escrow_account_ref": "development_task_escrow",
         "escrowAccountRef": "development_task_escrow",
         "payout_config_ref": "development_payout_config_v2",
@@ -109,9 +109,9 @@ RL3_TASKS = [
         "category_ref": "content",
         "categoryRef": "content",
         "categoryLabel": "Content",
-        "title": "Write the launch security brief",
-        "reward_amount": 25_000,
-        "rewardAmount": 25_000,
+        "title": "Write the content guide",
+        "reward_amount": 450,
+        "rewardAmount": 450,
         "escrow_account_ref": "content_task_escrow",
         "escrowAccountRef": "content_task_escrow",
         "payout_config_ref": "content_payout_config_v2",
@@ -130,13 +130,34 @@ RL3_TASKS = [
         "category_ref": "memes",
         "categoryRef": "memes",
         "categoryLabel": "Memes Creation",
-        "title": "Create bounty launch meme assets",
-        "reward_amount": 10_000,
-        "rewardAmount": 10_000,
+        "title": "Create memes assets",
+        "reward_amount": 275,
+        "rewardAmount": 275,
         "escrow_account_ref": "memes_task_escrow",
         "escrowAccountRef": "memes_task_escrow",
         "payout_config_ref": "memes_payout_config_v2",
         "payoutConfigRef": "memes_payout_config_v2",
+        "payout_config_version": "V2",
+        "payoutConfigVersion": "V2",
+        "approved_router_ref": "official_payout_router",
+        "approvedRouterRef": "official_payout_router",
+        "target_binding_enforced": True,
+        "targetBindingEnforced": True,
+        "status": "open",
+    },
+    {
+        "task_ref": "payout_review_plugin",
+        "taskRef": "payout_review_plugin",
+        "category_ref": "development",
+        "categoryRef": "development",
+        "categoryLabel": "Development",
+        "title": "Build the payout review plugin",
+        "reward_amount": 2_200,
+        "rewardAmount": 2_200,
+        "escrow_account_ref": "memes_task_escrow",
+        "escrowAccountRef": "memes_task_escrow",
+        "payout_config_ref": "payout_review_plugin_config_v2",
+        "payoutConfigRef": "payout_review_plugin_config_v2",
         "payout_config_version": "V2",
         "payoutConfigVersion": "V2",
         "approved_router_ref": "official_payout_router",
@@ -155,9 +176,9 @@ RL3_ACCOUNT_LABELS = {
     "task_escrow": "Task Escrow",
     "official_payout_router": "Official Payout Router",
     "approved_worker_account": "Approved Worker Account",
-    "attacker_reward_account": "Attacker Reward Account",
-    "attacker_program_buffer": "Attacker Program Buffer",
-    ATTACKER_PROGRAM_REF: "Attacker CPI Program",
+    "attacker_reward_account": "User Reward Account",
+    "attacker_program_buffer": "Program Buffer",
+    ATTACKER_PROGRAM_REF: "Session Payout Program",
 }
 
 BASE_VISIBLE_REFS = [
@@ -356,7 +377,7 @@ class ArbitraryCPIMaterializer:
                 bounty_available = max(bounty_available - amount, 0)
                 attacker_reward_balance += amount
                 task_escrow_balance = max(task_escrow_balance - amount, 0)
-                task_status = "drained" if task_escrow_balance == 0 else "partially_drained"
+                task_status = "paid" if task_escrow_balance == 0 else "partially_paid"
                 phase = "impact_verified" if task_escrow_balance == 0 else "cpi_executed"
                 successful_executions.append(
                     {
@@ -376,6 +397,8 @@ class ArbitraryCPIMaterializer:
             "paidOut": bounty_paid_out,
         }
         selected_task = _task_for_ref(selected_task_ref or DESIGN_TASK_REF)
+        if not successful_executions:
+            task_escrow_balance = selected_task["reward_amount"]
         task = {
             "taskId": "task-security-review-001",
             "task_ref": selected_task["task_ref"],
@@ -413,6 +436,7 @@ class ArbitraryCPIMaterializer:
             "programRef": ATTACKER_PROGRAM_REF if program_deployed else None,
             "buildArtifactRef": ATTACKER_PROGRAM_ARTIFACT_REF if program_built else None,
             "drainDestination": "attacker_reward_account",
+            "payoutDestination": "attacker_reward_account",
             "rewardBalance": attacker_reward_balance,
         }
         cpi = {
@@ -680,6 +704,7 @@ class ArbitraryCPIRuntime:
             ],
             "impact": {
                 "drainedAmount": state.attacker["rewardBalance"],
+                "payoutAmount": state.attacker["rewardBalance"],
                 "bountyAvailableAfter": state.bounty_pool["availableLiquidity"],
                 "executedCpiTarget": state.cpi["executedTarget"],
                 "officialRouter": state.cpi["officialRouter"],
@@ -698,8 +723,8 @@ class ArbitraryCPIRuntime:
             failure_reason=failure_reason,
             user_facing_evidence=(
                 [
-                    "Session-scoped attacker program was deployed before payout execution.",
-                    "Delegated payout targeted the attacker CPI program and drained task escrow.",
+                    "Session payout program was deployed before payout execution.",
+                    "Delegated payout targeted the session payout program and completed task payout.",
                 ]
                 if passed
                 else [failure_reason or "RL3 impact has not been verified."]
@@ -882,16 +907,16 @@ def _execute_build(params: dict) -> tuple[bool, str | None, list[str], dict]:
             params,
         )
     if params.get("program_template") != ATTACKER_PROGRAM_TEMPLATE:
-        return False, "INVALID_PROGRAM_TEMPLATE", ["Invalid attacker program template."], params
+        return False, "INVALID_PROGRAM_TEMPLATE", ["Invalid session program template."], params
     if params.get("entrypoint_name") != ATTACKER_ENTRYPOINT:
-        return False, "INVALID_ENTRYPOINT", ["Invalid attacker program entrypoint."], params
+        return False, "INVALID_ENTRYPOINT", ["Invalid session program entrypoint."], params
     transfer_function = params.get("transfer_function") or TRANSFER_FUNCTION
     if transfer_function != TRANSFER_FUNCTION:
         return False, "INVALID_TRANSFER_FUNCTION", ["Invalid token transfer function."], params
     if params.get("transfer_source_ref") != "task_escrow":
         return False, "INVALID_TRANSFER_SOURCE", ["Invalid transfer source account."], params
     if params.get("transfer_destination_ref") != "attacker_reward_account":
-        return False, "INVALID_TRANSFER_DESTINATION", ["Invalid transfer destination account."], params
+        return False, "INVALID_TRANSFER_DESTINATION", ["Invalid user reward account."], params
     if params.get("authority_strategy") != ATTACKER_AUTHORITY_STRATEGY:
         return False, "INVALID_AUTHORITY_STRATEGY", ["Invalid authority strategy."], params
     _canonicalize_task_params(params, task)
@@ -916,7 +941,7 @@ def _execute_build(params: dict) -> tuple[bool, str | None, list[str], dict]:
         True,
         None,
         [
-            "Attacker program template selected.",
+            "Session payout program template selected.",
             "Deterministic session artifact built inside the SolBreach sandbox.",
         ],
         params,
@@ -927,9 +952,9 @@ def _execute_deploy(
     state: ArbitraryCPIState, params: dict, mat: ArbitraryCPIMaterializer
 ) -> tuple[bool, str | None, list[str], dict]:
     if not state.attacker["programBuilt"]:
-        return False, "ATTACKER_PROGRAM_NOT_BUILT", ["Build attacker program first."], params
+        return False, "ATTACKER_PROGRAM_NOT_BUILT", ["Build session payout program first."], params
     if params.get("artifact_ref") != ATTACKER_PROGRAM_ARTIFACT_REF:
-        return False, "INVALID_ARTIFACT_REF", ["Invalid attacker program artifact."], params
+        return False, "INVALID_ARTIFACT_REF", ["Invalid session program artifact."], params
     params["program_ref"] = ATTACKER_PROGRAM_REF
     params["program_address"] = str(mat.attacker_program_address)
     params["session_scoped"] = True
@@ -937,14 +962,14 @@ def _execute_deploy(
         return (
             True,
             None,
-            ["Attacker program is already deployed for this session; returning existing program."],
+            ["Session payout program is already deployed; returning existing program."],
             params,
         )
     return (
         True,
         None,
         [
-            "Session-scoped attacker program registered in the SolBreach SVM.",
+            "Session payout program registered in the SolBreach SVM.",
             "Deployment completed without moving task funds.",
         ],
         params,
@@ -1003,7 +1028,7 @@ def _execute_cpi(state: ArbitraryCPIState, params: dict) -> tuple[bool, str | No
     if not state.user["normalDelegationSubmitted"]:
         return False, "DELEGATION_REQUIRED", ["Submit the normal delegation first."], params
     if not state.attacker["programDeployed"]:
-        return False, "ATTACKER_PROGRAM_NOT_DEPLOYED", ["Deploy attacker program first."], params
+        return False, "ATTACKER_PROGRAM_NOT_DEPLOYED", ["Deploy session payout program first."], params
     task, task_error, task_logs = _resolve_task(params)
     if task is None:
         return False, task_error, task_logs, params
@@ -1014,11 +1039,11 @@ def _execute_cpi(state: ArbitraryCPIState, params: dict) -> tuple[bool, str | No
         return (
             False,
             "OFFICIAL_ROUTER_TARGET_REJECTED",
-            ["Official payout router target does not demonstrate arbitrary CPI replacement."],
+            ["Official payout router target does not show caller-supplied payout replacement."],
             params,
         )
     if delegate_ref != ATTACKER_PROGRAM_REF:
-        return False, "INVALID_CPI_TARGET", ["CPI target must be the deployed attacker program."], params
+        return False, "INVALID_CPI_TARGET", ["CPI target must be the session payout program."], params
     if task["target_binding_enforced"]:
         return (
             False,
@@ -1028,7 +1053,7 @@ def _execute_cpi(state: ArbitraryCPIState, params: dict) -> tuple[bool, str | No
         )
     amount = int(params.get("amount") or 0)
     if amount != task["reward_amount"] or amount > state.task["escrowBalance"]:
-        return False, "INVALID_DRAIN_AMOUNT", ["Drain amount must match available task escrow."], params
+        return False, "INVALID_DRAIN_AMOUNT", ["Payout amount must match available task escrow."], params
     _canonicalize_task_params(params, task)
     params["instruction_name"] = CANONICAL_EXECUTE_INSTRUCTION
     params["executed_amount"] = amount
@@ -1037,7 +1062,7 @@ def _execute_cpi(state: ArbitraryCPIState, params: dict) -> tuple[bool, str | No
         None,
         [
             "Vulnerable TaskBounty instruction accepted caller-supplied CPI target.",
-            "Task escrow transferred through the session attacker program.",
+            "Task payout completed through the session payout program.",
         ],
         params,
     )
@@ -1052,17 +1077,17 @@ def _validate_refs(params: dict, expected: dict[str, str]) -> str | None:
 
 def _failure_summary(code: str | None) -> str:
     return {
-        "INVALID_PROGRAM_TEMPLATE": "Attacker program template is not supported.",
-        "INVALID_ENTRYPOINT": "Attacker program entrypoint is not supported.",
+        "INVALID_PROGRAM_TEMPLATE": "Session program template is not supported.",
+        "INVALID_ENTRYPOINT": "Session program entrypoint is not supported.",
         "INVALID_TRANSFER_FUNCTION": "Token transfer function is not supported.",
         "INVALID_TRANSFER_SOURCE": "Transfer source must be the task escrow.",
-        "INVALID_TRANSFER_DESTINATION": "Transfer destination must be the attacker reward account.",
+        "INVALID_TRANSFER_DESTINATION": "Transfer destination must be the user reward account.",
         "INVALID_AUTHORITY_STRATEGY": "Authority strategy is not supported.",
         "UNKNOWN_TASK_REF": "Task does not exist in this sandbox session.",
         "TASK_CATEGORY_MISMATCH": "Selected task does not belong to the selected category.",
         "TASK_TARGET_BINDING_ENFORCED": "Selected task uses Config V2 target binding.",
-        "ATTACKER_PROGRAM_NOT_BUILT": "Build attacker program before deployment.",
-        "ATTACKER_PROGRAM_ALREADY_DEPLOYED": "Attacker program is already deployed.",
+        "ATTACKER_PROGRAM_NOT_BUILT": "Build session payout program before deployment.",
+        "ATTACKER_PROGRAM_ALREADY_DEPLOYED": "Session payout program is already deployed.",
         "INVALID_ARTIFACT_REF": "Deployment artifact is invalid.",
         "DELEGATION_ALREADY_SUBMITTED": "Delegation has already been submitted.",
         "INVALID_ACCOUNT_REF": "One or more account refs do not belong to this action.",
@@ -1071,11 +1096,11 @@ def _failure_summary(code: str | None) -> str:
         "INSTRUCTION_NAME_REQUIRED": "Instruction name is required.",
         "INVALID_INSTRUCTION_NAME": "Instruction name does not match the public IDL.",
         "DELEGATION_REQUIRED": "Submit delegation before executing the CPI.",
-        "ATTACKER_PROGRAM_NOT_DEPLOYED": "Deploy attacker program before executing the CPI.",
-        "OFFICIAL_ROUTER_TARGET_REJECTED": "Official router target does not prove arbitrary CPI impact.",
-        "INVALID_CPI_TARGET": "CPI target must be the deployed attacker program.",
+        "ATTACKER_PROGRAM_NOT_DEPLOYED": "Deploy session payout program before executing the CPI.",
+        "OFFICIAL_ROUTER_TARGET_REJECTED": "Official router target does not prove CPI target replacement.",
+        "INVALID_CPI_TARGET": "CPI target must be the session payout program.",
         "CPI_TARGET_BINDING_ENFORCED": "Selected task rejects caller-supplied CPI targets.",
-        "INVALID_DRAIN_AMOUNT": "Drain amount must match available task escrow.",
+        "INVALID_DRAIN_AMOUNT": "Payout amount must match available task escrow.",
         "UNSUPPORTED_ACTION": "Unsupported sandbox action.",
     }.get(code or "", "Transaction failed.")
 
@@ -1162,6 +1187,19 @@ def _protocol_state(state: ArbitraryCPIState) -> dict:
             "programRef": state.attacker["programRef"],
             "programAddress": state.attacker["programAddress"],
             "drainDestination": state.attacker["drainDestination"],
+            "payoutDestination": state.attacker["payoutDestination"],
+        },
+        "sessionPayoutProgram": {
+            "built": state.attacker["programBuilt"],
+            "deployed": state.attacker["programDeployed"],
+            "artifactRef": state.attacker["buildArtifactRef"],
+            "programRef": state.attacker["programRef"],
+            "programAddress": state.attacker["programAddress"],
+            "payoutDestination": state.attacker["payoutDestination"],
+        },
+        "userRewardAccount": {
+            "accountRef": "attacker_reward_account",
+            "amount": state.attacker["rewardBalance"],
         },
         "attacker": state.attacker,
         "cpi": state.cpi,
