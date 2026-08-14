@@ -116,6 +116,10 @@ def _build_challenge(level: Level, level_session_id: str, wallet_address: str) -
         return _build_level_2_challenge(level, level_session_id, wallet_address, execution)
     if challenge_type == "arbitrary_cpi_delegated_signer_abuse":
         return _build_level_3_challenge(level, level_session_id, wallet_address, execution)
+    if challenge_type == "data_matching":
+        return _build_level_4_challenge(level, level_session_id, wallet_address, execution)
+    if challenge_type == "address_reuse_pda_lifecycle":
+        return _build_level_5_challenge(level, level_session_id, wallet_address, execution)
     raise LevelSetupUnavailableError("This level does not expose a supported exploit setup")
 
 
@@ -320,6 +324,168 @@ def _build_level_3_challenge(
                 "expected_sequence",
                 "session_binding",
                 "replay_protection",
+            ],
+        },
+    }
+
+
+def _build_level_4_challenge(
+    level: Level,
+    level_session_id: str,
+    wallet_address: str,
+    execution: dict[str, Any],
+) -> dict[str, Any]:
+    network = str(execution.get("network", "devnet"))
+    program_id = str(execution.get("program_id", _pubkey(level_session_id, "program")))
+    level4_state_pda = _pubkey(level_session_id, wallet_address, "level4_state_pda")
+    market_pda = _pubkey(level_session_id, wallet_address, "market_pda")
+    mismatched_market_pda = _pubkey(level_session_id, wallet_address, "mismatched_market_pda")
+    position_pda = _pubkey(level_session_id, wallet_address, "position_pda")
+    collateral_vault = _pubkey(level_session_id, wallet_address, "collateral_vault")
+    mismatched_vault = _pubkey(level_session_id, wallet_address, "mismatched_vault")
+    user_collateral = _pubkey(level_session_id, wallet_address, "user_collateral")
+    expected_collateral_mint = _pubkey(level_session_id, wallet_address, "expected_mint")
+    mismatched_collateral_mint = _pubkey(level_session_id, wallet_address, "mismatched_mint")
+    required_accounts = [
+        wallet_address,
+        level4_state_pda,
+        market_pda,
+        mismatched_market_pda,
+        position_pda,
+        collateral_vault,
+        mismatched_vault,
+        user_collateral,
+        expected_collateral_mint,
+        mismatched_collateral_mint,
+    ]
+    return {
+        "network": network,
+        "level_session_id": level_session_id,
+        "wallet_address": wallet_address,
+        "program_id": program_id,
+        "level4_state_pda": level4_state_pda,
+        "market_pda": market_pda,
+        "mismatched_market_pda": mismatched_market_pda,
+        "position_pda": position_pda,
+        "collateral_vault": collateral_vault,
+        "mismatched_vault": mismatched_vault,
+        "user_collateral": user_collateral,
+        "expected_collateral_mint": expected_collateral_mint,
+        "mismatched_collateral_mint": mismatched_collateral_mint,
+        "required_accounts": required_accounts,
+        "required_pdas": [
+            {
+                "label": "level4_state_pda",
+                "address": level4_state_pda,
+                "seeds": ["level_4", wallet_address],
+            },
+            {
+                "label": "market_pda",
+                "address": market_pda,
+                "seeds": ["market", level_session_id],
+            },
+            {
+                "label": "position_pda",
+                "address": position_pda,
+                "seeds": ["position", market_pda, wallet_address],
+            },
+        ],
+        "exploit_parameters": {
+            "vulnerability": "data_matching",
+            "mode": "mismatched_account_relationship",
+            "demo_mode": bool(execution.get("demo_mode", False)),
+            "attack_goal": (
+                "Route collateral using valid accounts whose stored relationships do not match"
+            ),
+            "expected_sequence": [
+                "init_level_4",
+                "route_collateral_with_mismatched_data",
+                "verify_and_close_level_4",
+            ],
+            "proof_fields": [
+                "market",
+                "position.market",
+                "market.collateral_vault",
+                "provided_collateral_vault",
+                "market.collateral_mint",
+                "provided_token_mint",
+            ],
+            "verification_focus": [
+                "valid account types",
+                "mismatched stored fields",
+                "state update accepted before data matching",
+            ],
+        },
+    }
+
+
+def _build_level_5_challenge(
+    level: Level,
+    level_session_id: str,
+    wallet_address: str,
+    execution: dict[str, Any],
+) -> dict[str, Any]:
+    network = str(execution.get("network", "devnet"))
+    program_id = str(execution.get("program_id", _pubkey(level_session_id, "program")))
+    order_id = hashlib.sha256(f"{level_session_id}:{wallet_address}:order".encode()).digest()[:8]
+    order_id_hex = order_id.hex()
+    level5_state_pda = _pubkey(level_session_id, wallet_address, "level5_state_pda")
+    receipt_pda = _pubkey("receipt", order_id_hex)
+    lifecycle_registry_pda = _pubkey("receipt_lifecycle", order_id_hex)
+    required_accounts = [wallet_address, level5_state_pda, receipt_pda, lifecycle_registry_pda]
+    return {
+        "network": network,
+        "level_session_id": level_session_id,
+        "wallet_address": wallet_address,
+        "program_id": program_id,
+        "level5_state_pda": level5_state_pda,
+        "receipt_pda": receipt_pda,
+        "lifecycle_registry_pda": lifecycle_registry_pda,
+        "order_id": order_id_hex,
+        "expected_status_before": "Archived",
+        "expected_status_after": "Open",
+        "required_accounts": required_accounts,
+        "required_pdas": [
+            {
+                "label": "level5_state_pda",
+                "address": level5_state_pda,
+                "seeds": ["level_5", wallet_address],
+            },
+            {
+                "label": "receipt_pda",
+                "address": receipt_pda,
+                "seeds": ["receipt", order_id_hex],
+            },
+            {
+                "label": "lifecycle_registry_pda",
+                "address": lifecycle_registry_pda,
+                "seeds": ["receipt_lifecycle", order_id_hex],
+            },
+        ],
+        "exploit_parameters": {
+            "vulnerability": "address_reuse",
+            "mechanism": "pda_lifecycle",
+            "mode": "stale_receipt_address_reuse",
+            "demo_mode": bool(execution.get("demo_mode", False)),
+            "attack_goal": "Reuse a stale PDA address and make it active again",
+            "expected_sequence": [
+                "init_level_5",
+                "archive_receipt",
+                "reopen_receipt",
+                "verify_and_close_level_5",
+            ],
+            "proof_fields": [
+                "receipt_pda",
+                "order_id",
+                "previous_status",
+                "final_status",
+                "generation",
+                "address_reused",
+            ],
+            "verification_focus": [
+                "same PDA address",
+                "closed or archived lifecycle",
+                "active state after address reuse",
             ],
         },
     }

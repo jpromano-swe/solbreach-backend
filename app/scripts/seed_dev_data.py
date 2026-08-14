@@ -5,6 +5,7 @@ from uuid import NAMESPACE_URL, uuid5
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.database.base import utc_now
 from app.core.database.session import AsyncSessionLocal
 from app.core.security.password import PasswordHasher
 from app.modules.beta_access.application.use_cases.beta_access import hash_access_code
@@ -49,12 +50,26 @@ VULNERABILITIES = [
         "tags": ["cpi", "transaction", "accounts"],
     },
     {
-        "slug": "advanced_bounty_drainer",
-        "title": "Advanced Bounty Drainer",
-        "category": "cpi",
+        "slug": "data_matching",
+        "title": "Data Matching",
+        "category": "data_matching",
         "difficulty": "hard",
-        "description": "Placeholder vulnerability for the post-Level 3 continuation path.",
-        "tags": ["cpi", "advanced", "placeholder"],
+        "description": (
+            "Accounts are individually valid, but their stored relationship fields do not "
+            "match the protocol action."
+        ),
+        "tags": ["relationships", "vault", "market", "position"],
+    },
+    {
+        "slug": "address_reuse",
+        "title": "Address Reuse",
+        "category": "address_reuse",
+        "difficulty": "hard",
+        "description": (
+            "A deterministic PDA address is reused after stale or closed lifecycle state "
+            "and trusted as active again."
+        ),
+        "tags": ["pda", "lifecycle", "address-reuse"],
     },
 ]
 
@@ -278,29 +293,147 @@ LEVELS = [
         },
     },
     {
-        "slug": "level-4-advanced-bounty-drainer",
-        "title": "Level 4: Advanced Bounty Drainer",
-        "description": "Post-demo continuation level placeholder unlocked after Level 3.",
+        "slug": "level-4-data-matching",
+        "title": "Level 4: Data Matching",
+        "description": (
+            "Exploit a collateral routing path where valid account types are accepted even "
+            "though market, position, vault, and mint relationship fields do not match."
+        ),
         "order": 4,
-        "vulnerability_slug": "advanced_bounty_drainer",
-        "vulnerability_category": "cpi",
+        "vulnerability_slug": "data_matching",
+        "vulnerability_category": "data_matching",
+        "difficulty": "hard",
+        "xp_reward": 400,
+        "objectives": [
+            "Inspect market, position, vault, and mint relationship fields.",
+            "Prepare the deterministic Data Matching challenge state.",
+            "Execute the route path with mismatched stored account relationships.",
+            "Submit a wallet-signed devnet proof transaction.",
+        ],
+        "instructions": (
+            "Run setup with the connected wallet, route collateral through accounts that are "
+            "valid by type but mismatched by stored relationship fields, then submit the "
+            "wallet-signed devnet transaction signature and relationship proof."
+        ),
+        "verification_requirements": [
+            "Transaction must exist and succeed on Solana devnet.",
+            "Connected wallet must be a signer.",
+            "Transaction must include the session-bound Level 4 account set.",
+            "The route path must execute with at least one mismatched relationship.",
+            "Fully matched market, vault, mint, and position relationships must not complete.",
+        ],
+        "resources": [{"label": "Starter repo", "url": "https://example.com/solbreach/level-4"}],
+        "verification_config": {
+            "checks": [
+                {"type": "session_binding"},
+                {"type": "replay_protection"},
+                {"type": "transaction_signature", "require_success": True},
+                {
+                    "type": "solana_transaction",
+                    "require_success": True,
+                    "require_wallet_signer": True,
+                    "require_challenge_accounts": True,
+                },
+                {
+                    "type": "data_matching_exploit",
+                    "required_account_labels": [
+                        "wallet_address",
+                        "level4_state_pda",
+                        "market_pda",
+                        "position_pda",
+                        "mismatched_vault",
+                        "expected_collateral_mint",
+                        "mismatched_collateral_mint",
+                    ],
+                },
+            ]
+        },
+        "example_proof": {
+            "transaction_signature": "demo-signature-level-4-abcdef",
+            "transaction_succeeded": True,
+        },
+        "demo_wallet": "DemoWallet111111111111111111111111111111111",
+        "demo_accounts": {},
+        "execution": {
+            "enabled": True,
+            "mode": "wallet_signed_demo_transaction",
+            "challenge_type": "data_matching",
+            "network": "devnet",
+            "program_id": "11111111111111111111111111111111",
+            "demo_mode": True,
+        },
+    },
+    {
+        "slug": "level-5-time-traveler",
+        "title": "Level 5: The Time Traveler",
+        "description": (
+            "Exploit an Address Reuse issue where a deterministic receipt PDA is archived "
+            "or closed, then reopened and trusted as active state again."
+        ),
+        "order": 5,
+        "vulnerability_slug": "address_reuse",
+        "vulnerability_category": "address_reuse",
         "difficulty": "hard",
         "xp_reward": 500,
         "objectives": [
-            "Continue the advanced CPI exploitation path.",
+            "Inspect deterministic receipt PDA lifecycle state.",
+            "Archive or stale the original receipt state.",
+            "Reopen the same receipt PDA address as active state.",
+            "Submit a wallet-signed devnet proof transaction.",
         ],
-        "instructions": "This level is reserved for the next playable slice.",
+        "instructions": (
+            "Run setup with the connected wallet, reuse the deterministic receipt PDA after "
+            "stale lifecycle state, reopen it as active, and submit the wallet-signed "
+            "devnet transaction signature with lifecycle proof."
+        ),
         "verification_requirements": [
-            "Coming soon.",
+            "Transaction must exist and succeed on Solana devnet.",
+            "Connected wallet must be a signer.",
+            "Transaction must include the session-bound Level 5 account set.",
+            "The same receipt PDA must be used before and after archive or close.",
+            "Fresh receipt addresses and guarded lifecycle paths must not complete.",
         ],
-        "resources": [],
-        "verification_config": {"checks": []},
-        "example_proof": {},
+        "resources": [{"label": "Starter repo", "url": "https://example.com/solbreach/level-5"}],
+        "verification_config": {
+            "checks": [
+                {"type": "session_binding"},
+                {"type": "replay_protection"},
+                {"type": "transaction_signature", "require_success": True},
+                {
+                    "type": "solana_transaction",
+                    "require_success": True,
+                    "require_wallet_signer": True,
+                    "require_challenge_accounts": True,
+                },
+                {
+                    "type": "address_reuse_lifecycle",
+                    "required_account_labels": [
+                        "wallet_address",
+                        "level5_state_pda",
+                        "receipt_pda",
+                    ],
+                },
+            ]
+        },
+        "example_proof": {
+            "transaction_signature": "demo-signature-level-5-abcdef",
+            "transaction_succeeded": True,
+        },
         "demo_wallet": "DemoWallet111111111111111111111111111111111",
         "demo_accounts": {},
-        "execution": {"enabled": False},
+        "execution": {
+            "enabled": True,
+            "mode": "wallet_signed_demo_transaction",
+            "challenge_type": "address_reuse_pda_lifecycle",
+            "network": "devnet",
+            "program_id": "11111111111111111111111111111111",
+            "demo_mode": True,
+        },
     },
 ]
+
+OBSOLETE_LEVEL_SLUGS = {"level-4-advanced-bounty-drainer"}
+OBSOLETE_VULNERABILITY_SLUGS = {"advanced_bounty_drainer"}
 
 
 def stable_id(slug: str) -> str:
@@ -327,6 +460,13 @@ async def seed_development_data(session: AsyncSession) -> None:
             )
             session.add(existing)
             await session.flush()
+        else:
+            existing.title = item["title"]
+            existing.category = item["category"]
+            existing.difficulty = item["difficulty"]
+            existing.description = item["description"]
+            existing.tags = item["tags"]
+            existing.deleted_at = None
         vulnerability_ids[existing.slug] = existing.id
 
     for item in LEVELS:
@@ -367,6 +507,16 @@ async def seed_development_data(session: AsyncSession) -> None:
             for key, value in values.items():
                 if key != "id":
                     setattr(existing, key, value)
+    for slug in OBSOLETE_LEVEL_SLUGS:
+        obsolete = await session.scalar(select(LevelModel).where(LevelModel.slug == slug))
+        if obsolete is not None:
+            obsolete.is_active = False
+    for slug in OBSOLETE_VULNERABILITY_SLUGS:
+        obsolete = await session.scalar(
+            select(VulnerabilityModel).where(VulnerabilityModel.slug == slug)
+        )
+        if obsolete is not None:
+            obsolete.deleted_at = utc_now()
     await session.commit()
 
 

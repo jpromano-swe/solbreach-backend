@@ -17,6 +17,8 @@ class CertificateDefinition:
 LEVEL_1_CERTIFICATE_ID = "solbreach-level-1"
 LEVEL_2_CERTIFICATE_ID = "solbreach-level-2"
 LEVEL_3_CERTIFICATE_ID = "solbreach-level-3"
+LEVEL_4_CERTIFICATE_ID = "level-4-data-matching"
+LEVEL_5_CERTIFICATE_ID = "level-5-time-traveler"
 
 CERTIFICATE_DEFINITIONS: dict[str, CertificateDefinition] = {
     LEVEL_1_CERTIFICATE_ID: CertificateDefinition(
@@ -46,6 +48,26 @@ CERTIFICATE_DEFINITIONS: dict[str, CertificateDefinition] = {
         image_path="/certificates/level-3.png",
         metadata_path="/certificates/metadata/level-3.json",
     ),
+    LEVEL_4_CERTIFICATE_ID: CertificateDefinition(
+        certificate_id=LEVEL_4_CERTIFICATE_ID,
+        certificate_number=4,
+        level=4,
+        title="Data Matching",
+        description="Certificate awarded for completing SolBreach Level 4: Data Matching.",
+        image_path="/certificates/level-4.png",
+        metadata_path="/certificates/metadata/level-4.json",
+    ),
+    LEVEL_5_CERTIFICATE_ID: CertificateDefinition(
+        certificate_id=LEVEL_5_CERTIFICATE_ID,
+        certificate_number=5,
+        level=5,
+        title="The Time Traveler",
+        description=(
+            "Certificate awarded for completing SolBreach Level 5: The Time Traveler."
+        ),
+        image_path="/certificates/level-5.png",
+        metadata_path="/certificates/metadata/level-5.json",
+    ),
 }
 
 CERTIFICATE_ORDER = [
@@ -58,6 +80,8 @@ LEVEL_ORDER_TO_CERTIFICATE_ID = {
     1: LEVEL_1_CERTIFICATE_ID,
     2: LEVEL_2_CERTIFICATE_ID,
     3: LEVEL_3_CERTIFICATE_ID,
+    4: LEVEL_4_CERTIFICATE_ID,
+    5: LEVEL_5_CERTIFICATE_ID,
 }
 
 LEGACY_CERTIFICATION_SLUGS = {

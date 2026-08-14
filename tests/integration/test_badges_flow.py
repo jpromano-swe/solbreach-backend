@@ -75,10 +75,12 @@ async def test_badges_me_returns_all_slots_and_seen_is_guarded(
         "level-1-illusionist",
         "level-2-identity-thief",
         "level-3-trojan-horse",
+        "level-4-data-matching",
+        "level-5-time-traveler",
         "power-user",
     ]
     assert all(badge["earned"] is False for badge in body["badges"])
-    assert body["summary"] == {"earned": 0, "total": 4, "powerUserEarned": False}
+    assert body["summary"] == {"earned": 0, "total": 6, "powerUserEarned": False}
 
     seen = await seeded_client.post("/api/v1/badges/level-1-illusionist/seen", headers=headers)
     assert seen.status_code == 409
@@ -146,7 +148,7 @@ async def test_level_badges_do_not_award_power_user(
     power_user = next(badge for badge in body["badges"] if badge["slug"] == "power-user")
     assert power_user["earned"] is False
     assert power_user["seenAt"] is None
-    assert body["summary"] == {"earned": 3, "total": 4, "powerUserEarned": False}
+    assert body["summary"] == {"earned": 3, "total": 6, "powerUserEarned": False}
 
     power_user_seen = await seeded_client.post("/api/v1/badges/power-user/seen", headers=headers)
     assert power_user_seen.status_code == 409

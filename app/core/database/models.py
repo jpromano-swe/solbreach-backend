@@ -7,6 +7,7 @@ from app.modules.beta_access.infrastructure.database.models import (
     BetaAccessGrantModel,
     BetaAccessRequestModel,
 )
+from app.modules.breach_rooms.infrastructure.database.models import BreachRoomSubmissionModel
 from app.modules.certifications.infrastructure.database.models import CertificationModel
 from app.modules.labs.infrastructure.database.models import (
     LabModel,
@@ -36,6 +37,7 @@ __all__ = [
     "BetaAccessCodeRedemptionModel",
     "BetaAccessGrantModel",
     "BetaAccessRequestModel",
+    "BreachRoomSubmissionModel",
     "LabModel",
     "ResearchLabCompletionModel",
     "ResearchLabExploitVerificationModel",

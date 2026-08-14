@@ -63,6 +63,18 @@ class Settings(BaseSettings):
         default=100_000,
         validation_alias="RESEARCH_LAB_MAX_FILE_SIZE_BYTES",
     )
+    breach_rooms_github_repo: str = Field(
+        default="jpromano-swe/solbreach-breachrooms",
+        validation_alias="BREACH_ROOMS_GITHUB_REPO",
+    )
+    breach_rooms_github_base_branch: str = Field(
+        default="main",
+        validation_alias="BREACH_ROOMS_GITHUB_BASE_BRANCH",
+    )
+    breach_rooms_github_token: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("BREACH_ROOMS_GITHUB_TOKEN", "GITHUB_TOKEN"),
+    )
 
     model_config = SettingsConfigDict(
         env_file=".env",

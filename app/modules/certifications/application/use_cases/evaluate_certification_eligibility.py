@@ -39,6 +39,8 @@ class EvaluateCertificationEligibilityUseCase:
 
     async def execute(self, user_id: str) -> Certification | None:
         canonical_certification = await self._evaluate_level_certifications(user_id)
+        if _completed_level_order(canonical_certification) in {4, 5}:
+            return canonical_certification
         level_2_certification = await self._evaluate_level_2_certification(user_id)
         level_3_certification = await self._evaluate_level_3_certification(user_id)
         if level_3_certification is not None:
@@ -115,6 +117,7 @@ class EvaluateCertificationEligibilityUseCase:
                         "completed_level_order": level.order,
                         "level_id": level.id,
                         "stage": "vulnerabilities",
+                        "vulnerability_family": level.vulnerability_category,
                         "minting_enabled": True,
                         "metadata_uri": absolute_certificate_url(base_url, definition.metadata_path),
                         "image_uri": absolute_certificate_url(base_url, definition.image_path),
@@ -217,3 +220,13 @@ class EvaluateCertificationEligibilityUseCase:
             )
         )
         return certification
+
+
+def _completed_level_order(certification: Certification | None) -> int | None:
+    if certification is None:
+        return None
+    value = certification.metadata.get("completed_level_order") or certification.metadata.get("level")
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
