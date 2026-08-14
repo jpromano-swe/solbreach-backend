@@ -74,17 +74,25 @@ class SubmitLevelUseCase:
         if state == LevelState.LOCKED:
             raise InvalidSubmissionError("Level is locked")
 
+        payload = dict(payload)
+        tx_signature = payload.get("transaction_signature")
+        wallet_address = payload.get("wallet_address")
         session = await self._sessions.get_active(user_id, level_id)
         if session is None:
+            idempotent_result = await self._idempotent_completed_result(
+                user_id,
+                level,
+                latest_session,
+                tx_signature if isinstance(tx_signature, str) else None,
+            )
+            if idempotent_result is not None:
+                return idempotent_result
             raise LevelNotStartedError("Start the level before submitting proof")
 
         if level.deployment_info.get("execution", {}).get("enabled") is True:
             if not session.challenge_context:
                 raise LevelSetupRequiredError("Run level setup before submitting proof")
 
-        payload = dict(payload)
-        tx_signature = payload.get("transaction_signature")
-        wallet_address = payload.get("wallet_address")
         if isinstance(tx_signature, str):
             existing = await self._submissions.get_by_tx_signature(tx_signature)
             if existing is not None:
@@ -182,6 +190,39 @@ class SubmitLevelUseCase:
             submission=submission,
             progress=progress,
             unlocked_next_level_id=unlocked_next_level_id,
+            certification=certification,
+        )
+
+    async def _idempotent_completed_result(
+        self,
+        user_id: str,
+        level,
+        latest_session,
+        tx_signature: str | None,
+    ) -> LevelSubmitResult | None:
+        if latest_session is None or latest_session.state != LevelState.COMPLETED:
+            return None
+        if not tx_signature or latest_session.tx_signature != tx_signature:
+            return None
+        existing = await self._submissions.get_by_tx_signature(tx_signature)
+        if (
+            existing is None
+            or existing.user_id != user_id
+            or existing.level_id != level.id
+            or existing.session_id != latest_session.id
+        ):
+            return None
+        progress = await self._progress.get_for_user_level(user_id, level.id)
+        certification = await EvaluateCertificationEligibilityUseCase(
+            self._certifications, self._levels, self._progress, self._events
+        ).execute(user_id)
+        next_level = await self._levels.get_by_order(level.order + 1)
+        return LevelSubmitResult(
+            level=level,
+            session=latest_session,
+            submission=existing,
+            progress=progress,
+            unlocked_next_level_id=next_level.id if next_level else None,
             certification=certification,
         )
 

@@ -30,6 +30,16 @@ class ResearchLabSessionModel(UUIDTimestampMixin, Base):
     status: Mapped[str] = mapped_column(String(40), index=True, nullable=False)
     objective_progress: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     xp_awarded: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    impact_verified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    verified_evidence_refs_json: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    finding_review_passed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    finding_review_attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    finding_review_score: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    finding_review_answers_json: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    failed_question_ids_json: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    critical_questions_passed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    finding_review_feedback: Mapped[str | None] = mapped_column(Text, nullable=True)
+    audit_report_builder_passed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -120,15 +130,24 @@ class ResearchLabTransactionModel(UUIDTimestampMixin, Base):
     __tablename__ = "research_lab_transactions"
     __table_args__ = (
         UniqueConstraint("session_id", "transaction_ref", name="uq_research_lab_tx_ref"),
+        UniqueConstraint("session_id", "idempotency_key", name="uq_research_lab_tx_idem"),
+        UniqueConstraint("session_id", "sequence_number", name="uq_research_lab_tx_seq"),
     )
 
     session_id: Mapped[str] = mapped_column(
         String(36), ForeignKey("research_lab_sessions.id"), index=True
     )
     transaction_ref: Mapped[str] = mapped_column(String(100), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(100), nullable=False, server_default="legacy")
+    sequence_number: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     instruction_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    parameters_json: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
     execution_status: Mapped[str] = mapped_column(String(40), index=True, nullable=False)
     logs_json: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    account_deltas_json: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    evidence_refs_json: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+    protocol_state_json: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    user_facing_evidence_json: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
     submitted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 

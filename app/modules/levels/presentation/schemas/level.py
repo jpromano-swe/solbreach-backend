@@ -115,6 +115,9 @@ class LevelStatusResponse(BaseModel):
     next_level_id: str | None
     exploit_status: str | None = None
     challenge_context: dict[str, Any] = Field(default_factory=dict)
+    level_id: str | None = None
+    level_session_id: str | None = None
+    certification: dict[str, Any] | None = None
 
 
 class LevelStartResponse(BaseModel):
@@ -153,6 +156,12 @@ class LevelStartResponse(BaseModel):
     state: str
     session: LevelSessionResponse
     execution: LevelExecutionMetadata | None = None
+    level_id: str | None = None
+    level_session_id: str | None = None
+    exploit_status: str | None = None
+    challenge_context: dict[str, Any] = Field(default_factory=dict)
+    challenge: dict[str, Any] = Field(default_factory=dict)
+    certification: dict[str, Any] | None = None
 
 
 class LevelSubmitRequest(BaseModel):

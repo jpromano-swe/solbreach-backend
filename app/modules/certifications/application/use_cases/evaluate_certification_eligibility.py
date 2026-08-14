@@ -1,6 +1,12 @@
 from datetime import UTC, datetime
 from uuid import uuid4
 
+from app.core.config.settings import get_settings
+from app.modules.certifications.domain.certificate_definitions import (
+    CERTIFICATE_DEFINITIONS,
+    LEVEL_ORDER_TO_CERTIFICATE_ID,
+    absolute_certificate_url,
+)
 from app.modules.certifications.domain.entities.certification import (
     Certification,
     CertificationMintStatus,
@@ -32,6 +38,9 @@ class EvaluateCertificationEligibilityUseCase:
         self._events = events
 
     async def execute(self, user_id: str) -> Certification | None:
+        canonical_certification = await self._evaluate_level_certifications(user_id)
+        if _completed_level_order(canonical_certification) in {4, 5}:
+            return canonical_certification
         level_2_certification = await self._evaluate_level_2_certification(user_id)
         level_3_certification = await self._evaluate_level_3_certification(user_id)
         if level_3_certification is not None:
@@ -47,7 +56,7 @@ class EvaluateCertificationEligibilityUseCase:
 
         for level in levels:
             if await self._progress.get_for_user_level(user_id, level.id) is None:
-                return level_2_certification
+                return level_2_certification or canonical_certification
 
         existing = await self._certifications.get_for_user_slug(
             user_id, BEGINNER_CERTIFICATION_SLUG
@@ -78,6 +87,55 @@ class EvaluateCertificationEligibilityUseCase:
             )
         )
         return certification
+
+    async def _evaluate_level_certifications(self, user_id: str) -> Certification | None:
+        latest_created: Certification | None = None
+        for level_order in sorted(LEVEL_ORDER_TO_CERTIFICATE_ID):
+            level = await self._levels.get_by_order(level_order)
+            if level is None:
+                continue
+            if await self._progress.get_for_user_level(user_id, level.id) is None:
+                continue
+            certificate_id = LEVEL_ORDER_TO_CERTIFICATE_ID[level_order]
+            existing = await self._certifications.get_for_user_slug(user_id, certificate_id)
+            if existing is not None:
+                latest_created = existing
+                continue
+            definition = CERTIFICATE_DEFINITIONS[certificate_id]
+            base_url = get_settings().app_base_url
+            certification = await self._certifications.create(
+                Certification(
+                    id=str(uuid4()),
+                    user_id=user_id,
+                    slug=definition.certificate_id,
+                    title=definition.title,
+                    description=definition.description,
+                    metadata={
+                        "certificate_id": definition.certificate_id,
+                        "certificate_number": definition.certificate_number,
+                        "level": definition.level,
+                        "completed_level_order": level.order,
+                        "level_id": level.id,
+                        "stage": "vulnerabilities",
+                        "vulnerability_family": level.vulnerability_category,
+                        "minting_enabled": True,
+                        "metadata_uri": absolute_certificate_url(base_url, definition.metadata_path),
+                        "image_uri": absolute_certificate_url(base_url, definition.image_path),
+                    },
+                    unlock_status=CertificationUnlockStatus.UNLOCKED,
+                    mint_status=CertificationMintStatus.NOT_MINTED,
+                    metadata_uri=absolute_certificate_url(base_url, definition.metadata_path),
+                    unlocked_at=datetime.now(UTC),
+                )
+            )
+            await self._events.publish(
+                DomainEvent(
+                    name="certification_unlocked",
+                    payload={"user_id": user_id, "certification_slug": definition.certificate_id},
+                )
+            )
+            latest_created = certification
+        return latest_created
 
     async def _evaluate_level_3_certification(self, user_id: str) -> Certification | None:
         existing = await self._certifications.get_for_user_slug(
@@ -162,3 +220,13 @@ class EvaluateCertificationEligibilityUseCase:
             )
         )
         return certification
+
+
+def _completed_level_order(certification: Certification | None) -> int | None:
+    if certification is None:
+        return None
+    value = certification.metadata.get("completed_level_order") or certification.metadata.get("level")
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None

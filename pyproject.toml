@@ -23,6 +23,7 @@ pyjwt = "^2.9.0"
 python-multipart = "^0.0.12"
 PyNaCl = "^1.5.0"
 email-validator = "^2.2.0"
+solders = "^0.27.1"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.3.3"
@@ -40,14 +41,15 @@ build-backend = "poetry.core.masonry.api"
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests", "app/modules"]
+pythonpath = ["."]
 
 [tool.ruff]
 line-length = 100
-target-version = ["py311"]
+target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
-ignore = ["B008"]
+ignore = ["B008", "E501", "I001"]
 
 [tool.black]
 line-length = 100

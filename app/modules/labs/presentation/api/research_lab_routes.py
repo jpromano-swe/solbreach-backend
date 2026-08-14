@@ -8,12 +8,17 @@ from app.core.dependencies.sandbox import get_sandbox_runtime
 from app.modules.analytics.infrastructure.repositories.sqlalchemy_analytics_repository import (
     SQLAlchemyAnalyticsRepository,
 )
+from app.modules.badges.application.use_cases.badges import EvaluateUserBadgesUseCase
+from app.modules.badges.infrastructure.repositories.sqlalchemy_badge_repository import (
+    SQLAlchemyBadgeRepository,
+)
 from app.modules.labs.application.use_cases.research_labs import ResearchLabService
 from app.modules.labs.infrastructure.repositories.sqlalchemy_research_lab_repository import (
     SQLAlchemyResearchLabRepository,
 )
 from app.modules.labs.presentation.schemas.research_lab import (
     ResearchLabAPIResponse,
+    ResearchLabFindingReviewSubmitRequest,
     ResearchLabPatchFilesRequest,
     ResearchLabReportSaveRequest,
     ResearchLabTransactionRequest,
@@ -41,6 +46,78 @@ def _service(
     )
 
 
+def _lab_id(data: dict | None = None) -> str | None:
+    if not data:
+        return None
+    return data.get("lab_id") or data.get("labId")
+
+
+def _action_family(action_type: str) -> str | None:
+    normalized = action_type.upper()
+    if "DEPOSIT" in normalized:
+        return "deposit"
+    if "WITHDRAW" in normalized or "BORROW" in normalized:
+        return "borrow"
+    return None
+
+
+def _transaction_metadata(data: dict, payload: ResearchLabTransactionRequest) -> dict:
+    protocol_state = data.get("protocolState") or data.get("protocol_state") or {}
+    parameters = payload.parameters or {}
+    return {
+        "actionType": payload.action_type,
+        "executionStatus": data.get("executionStatus") or data.get("execution_status"),
+        "transactionRef": data.get("transactionRef") or data.get("transaction_ref"),
+        "amount": parameters.get("amount"),
+        "collateralAccountRef": parameters.get("collateral_account_ref"),
+        "vaultAccountRef": parameters.get("vault_account_ref"),
+        "depositPathType": protocol_state.get("depositPathType"),
+        "hasOfficialDeposit": protocol_state.get("hasOfficialDeposit"),
+        "hasExploitDeposit": protocol_state.get("hasExploitDeposit"),
+        "poolLiquidity": protocol_state.get("poolLiquidity"),
+        "creditedCollateral": protocol_state.get("creditedCollateral"),
+        "maxBorrow": protocol_state.get("maxBorrow"),
+        "availableBorrow": protocol_state.get("availableBorrow"),
+        "maxDrainAmount": protocol_state.get("maxDrainAmount"),
+        "borrowedTotal": protocol_state.get("borrowedTotal"),
+        "maxDrainSatisfied": protocol_state.get("maxDrainSatisfied"),
+        "rejectionReason": _rejection_reason(data, protocol_state),
+    }
+
+
+def _rejection_reason(data: dict, protocol_state: dict) -> str | None:
+    if protocol_state.get("lastRejectedReason"):
+        return protocol_state["lastRejectedReason"]
+    for evidence in data.get("userFacingEvidence") or []:
+        if evidence.get("severity") in {"error", "warning"}:
+            return evidence.get("summary")
+    logs = data.get("logs") or []
+    return logs[0] if logs else None
+
+
+async def _record_lab_event(
+    analytics: SQLAlchemyAnalyticsRepository,
+    *,
+    event_type: str,
+    current_user: User,
+    session_id: str | None = None,
+    lab_id: str | None = None,
+    subject_type: str = "research_lab_session",
+    subject_id: str | None = None,
+    metadata: dict | None = None,
+) -> None:
+    await analytics.record(
+        event_type=event_type,
+        user_id=current_user.id,
+        wallet_address=current_user.wallet_address,
+        subject_type=subject_type,
+        subject_id=subject_id or session_id or lab_id,
+        session_id=session_id,
+        lab_id=lab_id,
+        metadata=metadata or {},
+    )
+
+
 @router.get(
     "",
     response_model=ResearchLabAPIResponse,
@@ -53,8 +130,15 @@ async def list_research_labs(
     runtime: SandboxRuntime = Depends(get_sandbox_runtime),
     settings: Settings = Depends(get_settings),
 ) -> ResearchLabAPIResponse:
-    _ = current_user
     data = await _service(session, runtime, settings).list_labs()
+    await _record_lab_event(
+        SQLAlchemyAnalyticsRepository(session),
+        event_type="research_labs_catalog_viewed",
+        current_user=current_user,
+        subject_type="research_lab_catalog",
+        subject_id="research_labs",
+    )
+    await session.commit()
     return ResearchLabAPIResponse(data=data)
 
 
@@ -71,8 +155,16 @@ async def get_research_lab(
     runtime: SandboxRuntime = Depends(get_sandbox_runtime),
     settings: Settings = Depends(get_settings),
 ) -> ResearchLabAPIResponse:
-    _ = current_user
     data = await _service(session, runtime, settings).get_lab(lab_id)
+    await _record_lab_event(
+        SQLAlchemyAnalyticsRepository(session),
+        event_type="research_lab_opened",
+        current_user=current_user,
+        lab_id=lab_id,
+        subject_type="research_lab",
+        subject_id=lab_id,
+    )
+    await session.commit()
     return ResearchLabAPIResponse(data=data)
 
 
@@ -100,6 +192,8 @@ async def create_research_lab_session(
         wallet_address=current_user.wallet_address,
         subject_type="research_lab",
         subject_id=data["lab_id"],
+        session_id=data["session_id"],
+        lab_id=data["lab_id"],
         metadata={"session_id": data["session_id"], "lab_slug": data["lab_slug"]},
     )
     await session.commit()
@@ -148,6 +242,42 @@ async def patch_research_lab_files(
 
 
 @router.get(
+    "/sessions/{session_id}/explorer",
+    response_model=ResearchLabAPIResponse,
+    summary="Get Research Lab explorer snapshot",
+    description=("Returns a session-scoped, learner-safe explorer projection for supported labs."),
+)
+async def get_research_lab_explorer(
+    session_id: str,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+    runtime: SandboxRuntime = Depends(get_sandbox_runtime),
+    settings: Settings = Depends(get_settings),
+) -> ResearchLabAPIResponse:
+    data = await _service(session, runtime, settings).get_explorer(current_user, session_id)
+    await session.commit()
+    return ResearchLabAPIResponse(data=data)
+
+
+@router.get(
+    "/sessions/{session_id}/scope",
+    response_model=ResearchLabAPIResponse,
+    summary="Get Research Lab task scope",
+    description="Returns session-owned task/category scope metadata for supported labs.",
+)
+async def get_research_lab_scope(
+    session_id: str,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+    runtime: SandboxRuntime = Depends(get_sandbox_runtime),
+    settings: Settings = Depends(get_settings),
+) -> ResearchLabAPIResponse:
+    data = await _service(session, runtime, settings).get_scope(current_user, session_id)
+    await session.commit()
+    return ResearchLabAPIResponse(data=data)
+
+
+@router.get(
     "/sessions/{session_id}/accounts",
     response_model=ResearchLabAPIResponse,
     summary="List visible Research Lab accounts",
@@ -161,13 +291,22 @@ async def list_research_lab_accounts(
     settings: Settings = Depends(get_settings),
 ) -> ResearchLabAPIResponse:
     data = await _service(session, runtime, settings).list_accounts(current_user, session_id)
-    await SQLAlchemyAnalyticsRepository(session).record(
+    analytics = SQLAlchemyAnalyticsRepository(session)
+    await analytics.record(
         event_type="account_inspected",
         user_id=current_user.id,
         wallet_address=current_user.wallet_address,
         subject_type="research_lab_session",
         subject_id=session_id,
+        session_id=session_id,
         metadata={"account_ref": "list"},
+    )
+    await _record_lab_event(
+        analytics,
+        event_type="rl1_account_state_viewed",
+        current_user=current_user,
+        session_id=session_id,
+        metadata={"accountRef": "list"},
     )
     await session.commit()
     return ResearchLabAPIResponse(data=data)
@@ -190,13 +329,22 @@ async def get_research_lab_account(
     data = await _service(session, runtime, settings).get_account(
         current_user, session_id, account_ref
     )
-    await SQLAlchemyAnalyticsRepository(session).record(
+    analytics = SQLAlchemyAnalyticsRepository(session)
+    await analytics.record(
         event_type="account_inspected",
         user_id=current_user.id,
         wallet_address=current_user.wallet_address,
         subject_type="research_lab_session",
         subject_id=session_id,
+        session_id=session_id,
         metadata={"account_ref": account_ref},
+    )
+    await _record_lab_event(
+        analytics,
+        event_type="rl1_account_state_viewed",
+        current_user=current_user,
+        session_id=session_id,
+        metadata={"accountRef": account_ref},
     )
     await session.commit()
     return ResearchLabAPIResponse(data=data)
@@ -219,18 +367,53 @@ async def submit_research_lab_transaction(
     data = await _service(session, runtime, settings).submit_transaction(
         current_user, session_id, payload.action_type, payload.parameters
     )
-    await SQLAlchemyAnalyticsRepository(session).record(
+    analytics = SQLAlchemyAnalyticsRepository(session)
+    metadata = _transaction_metadata(data, payload)
+    execution_status = metadata["executionStatus"]
+    action_family = _action_family(payload.action_type)
+    await analytics.record(
         event_type="sandbox_transaction_submitted",
         user_id=current_user.id,
         wallet_address=current_user.wallet_address,
         subject_type="research_lab_session",
         subject_id=session_id,
-        metadata={
-            "action_type": payload.action_type,
-            "result": data["execution_status"],
-            "transaction_ref": data["transaction_ref"],
-        },
+        session_id=session_id,
+        metadata=metadata,
     )
+    await _record_lab_event(
+        analytics,
+        event_type="rl1_transaction_submitted",
+        current_user=current_user,
+        session_id=session_id,
+        metadata=metadata,
+    )
+    if action_family is not None:
+        await _record_lab_event(
+            analytics,
+            event_type=f"rl1_{action_family}_submitted",
+            current_user=current_user,
+            session_id=session_id,
+            metadata=metadata,
+        )
+        await _record_lab_event(
+            analytics,
+            event_type=(
+                f"rl1_{action_family}_accepted"
+                if execution_status == "success"
+                else f"rl1_{action_family}_rejected"
+            ),
+            current_user=current_user,
+            session_id=session_id,
+            metadata=metadata,
+        )
+    if metadata.get("maxDrainSatisfied"):
+        await _record_lab_event(
+            analytics,
+            event_type="rl1_max_drain_used",
+            current_user=current_user,
+            session_id=session_id,
+            metadata=metadata,
+        )
     await session.commit()
     return ResearchLabAPIResponse(data=data)
 
@@ -296,33 +479,69 @@ async def verify_research_lab_objective(
     runtime: SandboxRuntime = Depends(get_sandbox_runtime),
     settings: Settings = Depends(get_settings),
 ) -> ResearchLabAPIResponse:
-    await SQLAlchemyAnalyticsRepository(session).record(
+    analytics = SQLAlchemyAnalyticsRepository(session)
+    await analytics.record(
         event_type="objective_verification_requested",
         user_id=current_user.id,
         wallet_address=current_user.wallet_address,
         subject_type="research_lab_session",
         subject_id=session_id,
+        session_id=session_id,
         metadata={},
+    )
+    await _record_lab_event(
+        analytics,
+        event_type="rl1_impact_verification_requested",
+        current_user=current_user,
+        session_id=session_id,
+        metadata={"objectiveRef": payload.objective_ref if payload else None},
     )
     data = await _service(session, runtime, settings).verify_objective(
         current_user, session_id, payload.objective_ref if payload else None
     )
     if data["passed"]:
-        await SQLAlchemyAnalyticsRepository(session).record(
+        await analytics.record(
             event_type="research_exploit_validated",
             user_id=current_user.id,
             wallet_address=current_user.wallet_address,
             subject_type="research_lab_session",
             subject_id=session_id,
+            session_id=session_id,
             metadata={"objective_ref": data["objective_ref"]},
         )
-        await SQLAlchemyAnalyticsRepository(session).record(
+        await analytics.record(
             event_type="report_unlocked",
             user_id=current_user.id,
             wallet_address=current_user.wallet_address,
             subject_type="research_lab_session",
             subject_id=session_id,
+            session_id=session_id,
             metadata={},
+        )
+        await _record_lab_event(
+            analytics,
+            event_type="rl1_impact_verified",
+            current_user=current_user,
+            session_id=session_id,
+            metadata={"objectiveRef": data["objective_ref"]},
+        )
+        await _record_lab_event(
+            analytics,
+            event_type="rl1_report_finding_unlocked",
+            current_user=current_user,
+            session_id=session_id,
+            metadata={"objectiveRef": data["objective_ref"]},
+        )
+    else:
+        await _record_lab_event(
+            analytics,
+            event_type="rl1_impact_rejected",
+            current_user=current_user,
+            session_id=session_id,
+            metadata={
+                "objectiveRef": data.get("objective_ref") or data.get("objectiveRef"),
+                "failureReason": data.get("failure_reason") or data.get("failureReason"),
+            },
         )
     await session.commit()
     return ResearchLabAPIResponse(data=data)
@@ -363,6 +582,88 @@ async def run_research_lab_tests(
 
 
 @router.get(
+    "/sessions/{session_id}/finding-review",
+    response_model=ResearchLabAPIResponse,
+    summary="Get Research Lab finding review",
+    description="Returns deterministic backend-owned finding review state for this RL1 session.",
+)
+async def get_research_lab_finding_review(
+    session_id: str,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+    runtime: SandboxRuntime = Depends(get_sandbox_runtime),
+    settings: Settings = Depends(get_settings),
+) -> ResearchLabAPIResponse:
+    data = await _service(session, runtime, settings).get_finding_review(current_user, session_id)
+    if data.get("status") != "locked":
+        await _record_lab_event(
+            SQLAlchemyAnalyticsRepository(session),
+            event_type="rl1_finding_review_started",
+            current_user=current_user,
+            session_id=session_id,
+            metadata={"status": data.get("status")},
+        )
+    await session.commit()
+    return ResearchLabAPIResponse(data=data)
+
+
+@router.post(
+    "/sessions/{session_id}/finding-review/submit",
+    response_model=ResearchLabAPIResponse,
+    summary="Submit Research Lab finding review",
+    description="Grades deterministic RL1 finding-review answers and persists backend-owned state.",
+)
+async def submit_research_lab_finding_review(
+    session_id: str,
+    payload: ResearchLabFindingReviewSubmitRequest,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db_session),
+    runtime: SandboxRuntime = Depends(get_sandbox_runtime),
+    settings: Settings = Depends(get_settings),
+) -> ResearchLabAPIResponse:
+    data = await _service(session, runtime, settings).submit_finding_review(
+        current_user, session_id, payload.answers
+    )
+    analytics = SQLAlchemyAnalyticsRepository(session)
+    review_metadata = {
+        "score": data["score"],
+        "attempts": data["findingReviewAttempts"],
+        "failedQuestionIds": data["failedQuestionIds"],
+    }
+    await analytics.record(
+        event_type=(
+            "finding_review_passed" if data["findingReviewPassed"] else "finding_review_retry"
+        ),
+        user_id=current_user.id,
+        wallet_address=current_user.wallet_address,
+        subject_type="research_lab_session",
+        subject_id=session_id,
+        session_id=session_id,
+        metadata=review_metadata,
+    )
+    await _record_lab_event(
+        analytics,
+        event_type="rl1_finding_review_submitted",
+        current_user=current_user,
+        session_id=session_id,
+        metadata=review_metadata,
+    )
+    await _record_lab_event(
+        analytics,
+        event_type=(
+            "rl1_finding_review_passed"
+            if data["findingReviewPassed"]
+            else "rl1_finding_review_failed"
+        ),
+        current_user=current_user,
+        session_id=session_id,
+        metadata=review_metadata,
+    )
+    await session.commit()
+    return ResearchLabAPIResponse(data=data)
+
+
+@router.get(
     "/sessions/{session_id}/report",
     response_model=ResearchLabAPIResponse,
     summary="Get Research Lab report",
@@ -376,6 +677,14 @@ async def get_research_lab_report(
     settings: Settings = Depends(get_settings),
 ) -> ResearchLabAPIResponse:
     data = await _service(session, runtime, settings).get_report(current_user, session_id)
+    if data.get("status") != "locked":
+        await _record_lab_event(
+            SQLAlchemyAnalyticsRepository(session),
+            event_type="rl1_audit_report_opened",
+            current_user=current_user,
+            session_id=session_id,
+            metadata={"status": data.get("status")},
+        )
     await session.commit()
     return ResearchLabAPIResponse(data=data)
 
@@ -384,7 +693,7 @@ async def get_research_lab_report(
     "/sessions/{session_id}/report",
     response_model=ResearchLabAPIResponse,
     summary="Save Research Lab report draft",
-    description="Saves structured report fields after sandbox tests pass.",
+    description="Saves structured report fields after backend impact verification unlocks the report.",
 )
 async def save_research_lab_report(
     session_id: str,
@@ -399,12 +708,21 @@ async def save_research_lab_report(
         session_id,
         payload.fields.model_dump(),
     )
-    await SQLAlchemyAnalyticsRepository(session).record(
+    analytics = SQLAlchemyAnalyticsRepository(session)
+    await analytics.record(
         event_type="report_started",
         user_id=current_user.id,
         wallet_address=current_user.wallet_address,
         subject_type="research_lab_session",
         subject_id=session_id,
+        session_id=session_id,
+        metadata={"status": data["status"]},
+    )
+    await _record_lab_event(
+        analytics,
+        event_type="rl1_audit_report_saved",
+        current_user=current_user,
+        session_id=session_id,
         metadata={"status": data["status"]},
     )
     await session.commit()
@@ -425,27 +743,58 @@ async def submit_research_lab_report(
     settings: Settings = Depends(get_settings),
 ) -> ResearchLabAPIResponse:
     data = await _service(session, runtime, settings).submit_report(current_user, session_id)
-    await SQLAlchemyAnalyticsRepository(session).record(
+    analytics = SQLAlchemyAnalyticsRepository(session)
+    if data["lab_completed"]:
+        lab_session = await SQLAlchemyResearchLabRepository(session).get_session(session_id)
+        await EvaluateUserBadgesUseCase(
+            SQLAlchemyBadgeRepository(session),
+            analytics,
+        ).earn_for_research_lab_completion(
+            current_user,
+            lab_session.lab_id if lab_session is not None else "",
+        )
+    report_metadata = {"status": data["status"], "labCompleted": data["lab_completed"]}
+    await analytics.record(
         event_type="report_submitted",
         user_id=current_user.id,
         wallet_address=current_user.wallet_address,
         subject_type="research_lab_session",
         subject_id=session_id,
-        metadata={"status": data["status"], "lab_completed": data["lab_completed"]},
+        session_id=session_id,
+        metadata=report_metadata,
     )
-    await SQLAlchemyAnalyticsRepository(session).record(
+    await analytics.record(
         event_type=(
-            "research_lab_completed"
-            if data["lab_completed"]
-            else "research_lab_report_retry"
+            "research_lab_completed" if data["lab_completed"] else "research_lab_report_retry"
         ),
         user_id=current_user.id,
         wallet_address=current_user.wallet_address,
         subject_type="research_lab_session",
         subject_id=session_id,
+        session_id=session_id,
         metadata={
             "status": data["status"],
             "xp_awarded": data["xp_awarded"],
+        },
+    )
+    await _record_lab_event(
+        analytics,
+        event_type="rl1_audit_report_submitted",
+        current_user=current_user,
+        session_id=session_id,
+        metadata=report_metadata,
+    )
+    await _record_lab_event(
+        analytics,
+        event_type=(
+            "rl1_audit_report_accepted" if data["lab_completed"] else "rl1_audit_report_rejected"
+        ),
+        current_user=current_user,
+        session_id=session_id,
+        metadata={
+            "status": data["status"],
+            "xpAwarded": data["xp_awarded"],
+            "labCompleted": data["lab_completed"],
         },
     )
     await session.commit()

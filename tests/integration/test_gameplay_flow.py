@@ -27,6 +27,8 @@ async def complete_executable_level(
     level_id: str,
     wallet_address: str,
     tx_signature: str,
+    *,
+    proof_extra: dict | None = None,
 ) -> dict:
     start_response = await client.post(f"/api/v1/levels/{level_id}/start", headers=headers)
     assert start_response.status_code == 201
@@ -50,14 +52,16 @@ async def complete_executable_level(
         signers=[challenge["wallet_address"]],
         account_keys=challenge["required_accounts"],
     )
-    submit_response = await client.post(
-        f"/api/v1/levels/{level_id}/submit",
-        headers=headers,
-        json={
+    proof = {
             "transaction_signature": tx_signature,
             "wallet_address": challenge["wallet_address"],
             "level_session_id": setup_data["level_session_id"],
-        },
+        }
+    proof.update(proof_extra or {})
+    submit_response = await client.post(
+        f"/api/v1/levels/{level_id}/submit",
+        headers=headers,
+        json={"proof": proof},
     )
     assert submit_response.status_code == 200
     body = submit_response.json()
@@ -275,7 +279,7 @@ async def test_level_3_happy_path_unlocks_level_4_and_certification_minting(
     level_1 = next(level for level in levels if level["slug"] == "level-1-fake-mint")
     level_2 = next(level for level in levels if level["slug"] == "level-2-authority-spoofing")
     level_3 = next(level for level in levels if level["slug"] == "level-3-unchecked-cpi")
-    level_4 = next(level for level in levels if level["slug"] == "level-4-advanced-bounty-drainer")
+    level_4 = next(level for level in levels if level["slug"] == "level-4-data-matching")
 
     await complete_executable_level(
         seeded_client,
@@ -369,10 +373,312 @@ async def test_level_3_happy_path_unlocks_level_4_and_certification_minting(
         f"/api/v1/levels/{level_4['id']}/status", headers=headers
     )
     assert level_4_status.json()["state"] == "available"
+    assert level_4_status.json()["certification"]["slug"] == "level-4-data-matching"
+    assert level_4_status.json()["certification"]["unlock_status"] == "locked"
 
     me_response = await seeded_client.get("/api/v1/auth/me", headers=headers)
     assert me_response.json()["xp"] == 650
     assert me_response.json()["completed_levels"] == 3
+
+
+async def test_level_4_data_matching_rejects_safe_path_and_unlocks_level_5(
+    seeded_client: AsyncClient, fake_blockchain: dict[str, BlockchainTransaction]
+) -> None:
+    await register_user(seeded_client, email="level-four@example.com")
+    token = await login_token(seeded_client, email="level-four@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    levels = (await seeded_client.get("/api/v1/levels")).json()
+    level_1 = next(level for level in levels if level["slug"] == "level-1-fake-mint")
+    level_2 = next(level for level in levels if level["slug"] == "level-2-authority-spoofing")
+    level_3 = next(level for level in levels if level["slug"] == "level-3-unchecked-cpi")
+    level_4 = next(level for level in levels if level["slug"] == "level-4-data-matching")
+    level_5 = next(level for level in levels if level["slug"] == "level-5-time-traveler")
+
+    await complete_executable_level(
+        seeded_client,
+        fake_blockchain,
+        headers,
+        level_1["id"],
+        "LevelFourPrereqOneWallet11111111111111111111",
+        "level-four-prereq-one-signature-abcdef",
+    )
+    await complete_executable_level(
+        seeded_client,
+        fake_blockchain,
+        headers,
+        level_2["id"],
+        "LevelFourPrereqTwoWallet11111111111111111111",
+        "level-four-prereq-two-signature-abcdef",
+    )
+    await complete_executable_level(
+        seeded_client,
+        fake_blockchain,
+        headers,
+        level_3["id"],
+        "LevelFourPrereqThreeWallet111111111111111111",
+        "level-four-prereq-three-signature-abcdef",
+    )
+
+    await seeded_client.post(f"/api/v1/levels/{level_4['id']}/start", headers=headers)
+    setup_response = await seeded_client.post(
+        f"/api/v1/levels/{level_4['id']}/setup",
+        headers=headers,
+        json={"wallet_address": "DataMatchWallet11111111111111111111111111"},
+    )
+    setup_data = setup_response.json()
+    challenge = setup_data["challenge"]
+    assert challenge["exploit_parameters"]["vulnerability"] == "data_matching"
+    assert challenge["level4_state_pda"]
+    assert challenge["mismatched_vault"]
+
+    resumed_start = await seeded_client.post(f"/api/v1/levels/{level_4['id']}/start", headers=headers)
+    resumed_start_data = resumed_start.json()
+    assert resumed_start_data["level_id"] == level_4["id"]
+    assert resumed_start_data["level_session_id"] == setup_data["level_session_id"]
+    assert resumed_start_data["exploit_status"] == "setup_ready"
+    assert resumed_start_data["challenge"]["level4_state_pda"] == challenge["level4_state_pda"]
+    assert resumed_start_data["challenge_context"]["level4_state_pda"] == challenge["level4_state_pda"]
+
+    safe_signature = "safe-level-4-signature-abcdef"
+    fake_blockchain[safe_signature] = BlockchainTransaction(
+        signature=safe_signature,
+        network="devnet",
+        exists=True,
+        succeeded=True,
+        slot=900,
+        signers=[challenge["wallet_address"]],
+        account_keys=challenge["required_accounts"],
+    )
+    safe_submit = await seeded_client.post(
+        f"/api/v1/levels/{level_4['id']}/submit",
+        headers=headers,
+        json={
+            "proof": {
+                "transaction_signature": safe_signature,
+                "wallet_address": challenge["wallet_address"],
+                "level_session_id": setup_data["level_session_id"],
+                "data_matching": {
+                    "route_executed": True,
+                    "mismatched_market": False,
+                    "mismatched_vault": False,
+                    "mismatched_mint": False,
+                },
+            }
+        },
+    )
+    assert safe_submit.status_code == 200
+    assert safe_submit.json()["success"] is False
+
+    await seeded_client.post(f"/api/v1/levels/{level_4['id']}/start", headers=headers)
+    setup_response = await seeded_client.post(
+        f"/api/v1/levels/{level_4['id']}/setup",
+        headers=headers,
+        json={"wallet_address": "DataMatchWallet11111111111111111111111111"},
+    )
+    setup_data = setup_response.json()
+    challenge = setup_data["challenge"]
+    tx_signature = "valid-level-4-signature-abcdef"
+    fake_blockchain[tx_signature] = BlockchainTransaction(
+        signature=tx_signature,
+        network="devnet",
+        exists=True,
+        succeeded=True,
+        slot=901,
+        signers=[challenge["wallet_address"]],
+        account_keys=challenge["required_accounts"],
+    )
+    submit_response = await seeded_client.post(
+        f"/api/v1/levels/{level_4['id']}/submit",
+        headers=headers,
+        json={
+            "proof": {
+                "transaction_signature": tx_signature,
+                "wallet_address": challenge["wallet_address"],
+                "level_session_id": setup_data["level_session_id"],
+                "data_matching": {
+                    "route_executed": True,
+                    "mismatched_market": False,
+                    "mismatched_vault": True,
+                    "mismatched_mint": True,
+                    "provided_collateral_vault": challenge["mismatched_vault"],
+                },
+            }
+        },
+    )
+    assert submit_response.status_code == 200
+    submit_data = submit_response.json()
+    assert submit_data["success"] is True
+    assert submit_data["data"]["unlocked_level_id"] == level_5["id"]
+    assert submit_data["data"]["certification"]["slug"] == "level-4-data-matching"
+    assert submit_data["data"]["certification"]["metadata"]["vulnerability_family"] == (
+        "data_matching"
+    )
+
+    replay = await seeded_client.post(
+        f"/api/v1/levels/{level_4['id']}/submit",
+        headers=headers,
+        json={
+            "proof": {
+                "transaction_signature": tx_signature,
+                "wallet_address": challenge["wallet_address"],
+                "level_session_id": setup_data["level_session_id"],
+            }
+        },
+    )
+    assert replay.status_code == 200
+    assert replay.json()["success"] is True
+
+    status = await seeded_client.get(f"/api/v1/levels/{level_4['id']}/status", headers=headers)
+    assert status.json()["completed"] is True
+    assert status.json()["exploit_status"] == "verified"
+    assert status.json()["certification"]["mint_status"] == "available"
+
+
+async def test_level_5_time_traveler_rejects_fresh_path_and_completes_reuse(
+    seeded_client: AsyncClient, fake_blockchain: dict[str, BlockchainTransaction]
+) -> None:
+    await register_user(seeded_client, email="level-five@example.com")
+    token = await login_token(seeded_client, email="level-five@example.com")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    levels = (await seeded_client.get("/api/v1/levels")).json()
+    level_1 = next(level for level in levels if level["slug"] == "level-1-fake-mint")
+    level_2 = next(level for level in levels if level["slug"] == "level-2-authority-spoofing")
+    level_3 = next(level for level in levels if level["slug"] == "level-3-unchecked-cpi")
+    level_4 = next(level for level in levels if level["slug"] == "level-4-data-matching")
+    level_5 = next(level for level in levels if level["slug"] == "level-5-time-traveler")
+
+    await complete_executable_level(
+        seeded_client,
+        fake_blockchain,
+        headers,
+        level_1["id"],
+        "LevelFivePrereqOneWallet11111111111111111111",
+        "level-five-prereq-one-signature-abcdef",
+    )
+    await complete_executable_level(
+        seeded_client,
+        fake_blockchain,
+        headers,
+        level_2["id"],
+        "LevelFivePrereqTwoWallet11111111111111111111",
+        "level-five-prereq-two-signature-abcdef",
+    )
+    await complete_executable_level(
+        seeded_client,
+        fake_blockchain,
+        headers,
+        level_3["id"],
+        "LevelFivePrereqThreeWallet111111111111111111",
+        "level-five-prereq-three-signature-abcdef",
+    )
+    await complete_executable_level(
+        seeded_client,
+        fake_blockchain,
+        headers,
+        level_4["id"],
+        "LevelFivePrereqFourWallet1111111111111111111",
+        "level-five-prereq-four-signature-abcdef",
+        proof_extra={
+            "data_matching": {
+                "route_executed": True,
+                "mismatched_market": True,
+                "mismatched_vault": False,
+                "mismatched_mint": False,
+            }
+        },
+    )
+
+    await seeded_client.post(f"/api/v1/levels/{level_5['id']}/start", headers=headers)
+    setup_response = await seeded_client.post(
+        f"/api/v1/levels/{level_5['id']}/setup",
+        headers=headers,
+        json={"wallet_address": "TimeTravelerWallet11111111111111111111111"},
+    )
+    setup_data = setup_response.json()
+    challenge = setup_data["challenge"]
+    assert challenge["exploit_parameters"]["vulnerability"] == "address_reuse"
+    assert challenge["exploit_parameters"]["mechanism"] == "pda_lifecycle"
+
+    fresh_signature = "fresh-level-5-signature-abcdef"
+    fake_blockchain[fresh_signature] = BlockchainTransaction(
+        signature=fresh_signature,
+        network="devnet",
+        exists=True,
+        succeeded=True,
+        slot=950,
+        signers=[challenge["wallet_address"]],
+        account_keys=challenge["required_accounts"],
+    )
+    fresh_submit = await seeded_client.post(
+        f"/api/v1/levels/{level_5['id']}/submit",
+        headers=headers,
+        json={
+            "proof": {
+                "transaction_signature": fresh_signature,
+                "wallet_address": challenge["wallet_address"],
+                "level_session_id": setup_data["level_session_id"],
+                "address_reuse": {
+                    "receipt_pda": challenge["receipt_pda"],
+                    "order_id": challenge["order_id"],
+                    "previous_status": "Open",
+                    "final_status": "Open",
+                    "address_reused": False,
+                    "reopened": False,
+                },
+            }
+        },
+    )
+    assert fresh_submit.status_code == 200
+    assert fresh_submit.json()["success"] is False
+
+    await seeded_client.post(f"/api/v1/levels/{level_5['id']}/start", headers=headers)
+    setup_response = await seeded_client.post(
+        f"/api/v1/levels/{level_5['id']}/setup",
+        headers=headers,
+        json={"wallet_address": "TimeTravelerWallet11111111111111111111111"},
+    )
+    setup_data = setup_response.json()
+    challenge = setup_data["challenge"]
+    tx_signature = "valid-level-5-signature-abcdef"
+    fake_blockchain[tx_signature] = BlockchainTransaction(
+        signature=tx_signature,
+        network="devnet",
+        exists=True,
+        succeeded=True,
+        slot=951,
+        signers=[challenge["wallet_address"]],
+        account_keys=challenge["required_accounts"],
+    )
+    submit_response = await seeded_client.post(
+        f"/api/v1/levels/{level_5['id']}/submit",
+        headers=headers,
+        json={
+            "proof": {
+                "transaction_signature": tx_signature,
+                "wallet_address": challenge["wallet_address"],
+                "level_session_id": setup_data["level_session_id"],
+                "address_reuse": {
+                    "receipt_pda": challenge["receipt_pda"],
+                    "order_id": challenge["order_id"],
+                    "previous_status": "Archived",
+                    "final_status": "Open",
+                    "generation": 2,
+                    "address_reused": True,
+                    "reopened": True,
+                },
+            }
+        },
+    )
+    assert submit_response.status_code == 200
+    submit_data = submit_response.json()
+    assert submit_data["success"] is True
+    assert submit_data["data"]["next_level_unlocked"] is False
+    assert submit_data["data"]["certification"]["slug"] == "level-5-time-traveler"
+    assert submit_data["data"]["certification"]["metadata"]["vulnerability_family"] == (
+        "address_reuse"
+    )
 
 
 async def test_level_1_invalid_submission_returns_frontend_friendly_error(

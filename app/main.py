@@ -7,17 +7,26 @@ from app.core.logging.setup import configure_logging
 from app.core.middleware.request_id import RequestIDMiddleware
 from app.modules.analytics.presentation.api.routes import router as analytics_router
 from app.modules.auth.presentation.api.routes import router as auth_router
-from app.modules.certifications.presentation.api.routes import router as certifications_router
+from app.modules.badges.presentation.api.routes import router as badges_router
+from app.modules.beta_access.presentation.api.routes import router as beta_access_router
+from app.modules.breach_rooms.presentation.api.routes import router as breach_rooms_router
+from app.modules.certifications.presentation.api.routes import (
+    certificate_router,
+    router as certifications_router,
+)
 from app.modules.labs.presentation.api.research_lab_routes import (
     router as research_labs_router,
 )
 from app.modules.labs.presentation.api.routes import router as labs_router
 from app.modules.levels.presentation.api.routes import router as levels_router
+from app.modules.onboarding.presentation.api.routes import router as onboarding_router
 from app.modules.progress.presentation.api.routes import router as progress_router
 from app.modules.submissions.presentation.api.routes import router as submissions_router
 from app.modules.users.presentation.api.routes import router as users_router
 from app.modules.vulnerabilities.presentation.api.routes import router as vulnerabilities_router
+from app.modules.waitlist.presentation.api.routes import router as waitlist_router
 import os
+from starlette.requests import Request
 
 
 def create_app() -> FastAPI:
@@ -41,6 +50,11 @@ def create_app() -> FastAPI:
 
     prefix = settings.api_v1_prefix
     app.include_router(auth_router, prefix=f"{prefix}/auth", tags=["auth"])
+    app.include_router(beta_access_router, prefix=f"{prefix}/beta-access", tags=["beta-access"])
+    app.include_router(
+        breach_rooms_router, prefix=f"{prefix}/breach-rooms", tags=["breach-rooms"]
+    )
+    app.include_router(badges_router, prefix=f"{prefix}/badges", tags=["badges"])
     app.include_router(analytics_router, prefix=f"{prefix}/analytics", tags=["analytics"])
     app.include_router(users_router, prefix=f"{prefix}/users", tags=["users"])
     app.include_router(
@@ -52,14 +66,42 @@ def create_app() -> FastAPI:
     app.include_router(
         certifications_router, prefix=f"{prefix}/certifications", tags=["certifications"]
     )
+    app.include_router(
+        certificate_router, prefix=f"{prefix}/certificates", tags=["certificates"]
+    )
+    app.include_router(waitlist_router, prefix=f"{prefix}/waitlist", tags=["waitlist"])
+    app.include_router(onboarding_router, prefix=f"{prefix}/onboarding", tags=["onboarding"])
     app.include_router(labs_router, prefix=f"{prefix}/labs", tags=["labs"])
     app.include_router(
         research_labs_router, prefix=f"{prefix}/research-labs", tags=["research-labs"]
     )
 
+    @app.middleware("http")
+    async def attach_deploy_headers(request: Request, call_next):
+        response = await call_next(request)
+        response.headers["X-SolBreach-Stage"] = os.getenv("STAGE", "")
+        response.headers["X-SolBreach-Deploy-Version"] = os.getenv("DEPLOY_VERSION", "")
+        response.headers["X-SolBreach-Deploy-Commit-Sha"] = os.getenv("DEPLOY_COMMIT_SHA", "")
+        return response
+
     @app.get("/health", tags=["system"])
     async def health() -> dict[str, str]:
-        return {"status": "ok"}
+        return {
+            "status": "ok",
+            "stage": os.getenv("STAGE", ""),
+            "environment": os.getenv("ENVIRONMENT", ""),
+            "deploy_version": os.getenv("DEPLOY_VERSION", ""),
+            "deploy_commit_sha": os.getenv("DEPLOY_COMMIT_SHA", ""),
+        }
+
+    @app.get("/version", tags=["system"])
+    async def version() -> dict[str, str]:
+        return {
+            "stage": os.getenv("STAGE", ""),
+            "environment": os.getenv("ENVIRONMENT", ""),
+            "deploy_version": os.getenv("DEPLOY_VERSION", ""),
+            "deploy_commit_sha": os.getenv("DEPLOY_COMMIT_SHA", ""),
+        }
 
     return app
 

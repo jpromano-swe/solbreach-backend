@@ -33,15 +33,20 @@ class ResearchLabVerifyObjectiveRequest(BaseModel):
     objective_ref: str | None = None
 
 
+class ResearchLabFindingReviewSubmitRequest(BaseModel):
+    answers: dict[str, str] = Field(default_factory=dict)
+
+
 class ResearchLabReportFields(BaseModel):
-    vulnerability_category: str | None = None
-    affected_area: str | None = None
-    attacker_controlled_input: str | None = None
-    root_cause: str = ""
-    impact: str = ""
-    proof: str = ""
-    recommended_fix: str = ""
-    severity: str | None = None
+    titleOptionId: str | None = None
+    severityOptionId: str | None = None
+    likelihoodOptionId: str | None = None
+    categoryOptionId: str | None = None
+    rootCauseOptionId: str | None = None
+    proofOfImpactOptionId: str | None = None
+    recommendedMitigationOptionId: str | None = None
+    verifiedEvidenceRefs: list[str] = Field(default_factory=list)
+    optionalNotes: str | None = None
 
 
 class ResearchLabReportSaveRequest(BaseModel):

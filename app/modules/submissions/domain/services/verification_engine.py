@@ -314,6 +314,193 @@ class DelegatedCPIExploitStrategy:
         )
 
 
+class DataMatchingExploitStrategy:
+    name = "data_matching_exploit"
+
+    def verify(self, config: dict[str, Any], payload: dict[str, Any]) -> VerificationCheckResult:
+        transaction = payload.get("onchain_transaction")
+        if not isinstance(transaction, dict) or transaction.get("exists") is not True:
+            return VerificationCheckResult(self.name, False, "Transaction was not found on devnet")
+
+        challenge_context = payload.get("challenge_context") or {}
+        exploit_parameters = challenge_context.get("exploit_parameters") or {}
+        if exploit_parameters.get("vulnerability") != "data_matching":
+            return VerificationCheckResult(
+                self.name,
+                False,
+                "Challenge context is not a data matching exploit",
+                {"vulnerability": exploit_parameters.get("vulnerability")},
+            )
+
+        account_keys = set(transaction.get("account_keys") or [])
+        required_labels = config.get(
+            "required_account_labels",
+            [
+                "wallet_address",
+                "level4_state_pda",
+                "market_pda",
+                "position_pda",
+                "mismatched_vault",
+                "expected_collateral_mint",
+                "mismatched_collateral_mint",
+            ],
+        )
+        missing_labels = [
+            label
+            for label in required_labels
+            if not challenge_context.get(label) or challenge_context.get(label) not in account_keys
+        ]
+        if missing_labels:
+            return VerificationCheckResult(
+                self.name,
+                False,
+                "Transaction did not include the data-matching challenge account set",
+                {"missing_account_labels": missing_labels},
+            )
+
+        proof = payload.get("data_matching") or payload.get("relationship_proof") or {}
+        if not isinstance(proof, dict):
+            proof = {}
+        route_executed = proof.get("route_executed", payload.get("route_executed"))
+        mismatched_market = proof.get("mismatched_market", payload.get("mismatched_market"))
+        mismatched_vault = proof.get("mismatched_vault", payload.get("mismatched_vault"))
+        mismatched_mint = proof.get("mismatched_mint", payload.get("mismatched_mint"))
+        mismatch_present = any(value is True for value in [mismatched_market, mismatched_vault, mismatched_mint])
+        if route_executed is not True:
+            return VerificationCheckResult(
+                self.name,
+                False,
+                "Level 4 proof did not execute the vulnerable route path",
+                {"route_executed": route_executed},
+            )
+        if not mismatch_present:
+            return VerificationCheckResult(
+                self.name,
+                False,
+                "Fully matched account relationships do not complete Level 4",
+                {
+                    "mismatched_market": mismatched_market,
+                    "mismatched_vault": mismatched_vault,
+                    "mismatched_mint": mismatched_mint,
+                },
+            )
+
+        expected_vault = challenge_context.get("mismatched_vault")
+        provided_vault = proof.get("provided_collateral_vault") or payload.get("provided_collateral_vault")
+        if expected_vault and provided_vault and provided_vault != expected_vault:
+            return VerificationCheckResult(
+                self.name,
+                False,
+                "Provided collateral vault is not the session mismatched vault",
+                {"expected": expected_vault, "actual": provided_vault},
+            )
+
+        return VerificationCheckResult(
+            self.name,
+            True,
+            "Data matching proof accepted",
+            {
+                "checked_account_labels": required_labels,
+                "mismatched_market": mismatched_market,
+                "mismatched_vault": mismatched_vault,
+                "mismatched_mint": mismatched_mint,
+            },
+        )
+
+
+class AddressReuseLifecycleStrategy:
+    name = "address_reuse_lifecycle"
+
+    def verify(self, config: dict[str, Any], payload: dict[str, Any]) -> VerificationCheckResult:
+        transaction = payload.get("onchain_transaction")
+        if not isinstance(transaction, dict) or transaction.get("exists") is not True:
+            return VerificationCheckResult(self.name, False, "Transaction was not found on devnet")
+
+        challenge_context = payload.get("challenge_context") or {}
+        exploit_parameters = challenge_context.get("exploit_parameters") or {}
+        if exploit_parameters.get("vulnerability") != "address_reuse":
+            return VerificationCheckResult(
+                self.name,
+                False,
+                "Challenge context is not an address reuse exploit",
+                {"vulnerability": exploit_parameters.get("vulnerability")},
+            )
+
+        account_keys = set(transaction.get("account_keys") or [])
+        required_labels = config.get(
+            "required_account_labels",
+            ["wallet_address", "level5_state_pda", "receipt_pda"],
+        )
+        missing_labels = [
+            label
+            for label in required_labels
+            if not challenge_context.get(label) or challenge_context.get(label) not in account_keys
+        ]
+        if missing_labels:
+            return VerificationCheckResult(
+                self.name,
+                False,
+                "Transaction did not include the address-reuse challenge account set",
+                {"missing_account_labels": missing_labels},
+            )
+
+        proof = payload.get("address_reuse") or payload.get("lifecycle_proof") or {}
+        if not isinstance(proof, dict):
+            proof = {}
+        receipt_pda = proof.get("receipt_pda", payload.get("receipt_pda"))
+        order_id = proof.get("order_id", payload.get("order_id"))
+        previous_status = str(proof.get("previous_status", payload.get("previous_status", ""))).lower()
+        final_status = str(proof.get("final_status", payload.get("final_status", ""))).lower()
+        address_reused = proof.get("address_reused", payload.get("address_reused"))
+        reopened = proof.get("reopened", payload.get("reopened"))
+        guarded_lifecycle = proof.get("guarded_lifecycle", payload.get("guarded_lifecycle"))
+
+        if receipt_pda != challenge_context.get("receipt_pda"):
+            return VerificationCheckResult(
+                self.name,
+                False,
+                "Receipt PDA does not match the session challenge PDA",
+                {"expected": challenge_context.get("receipt_pda"), "actual": receipt_pda},
+            )
+        if order_id != challenge_context.get("order_id"):
+            return VerificationCheckResult(
+                self.name,
+                False,
+                "Order id does not match the session challenge order",
+                {"expected": challenge_context.get("order_id"), "actual": order_id},
+            )
+        if previous_status not in {"archived", "closed"} or final_status != "open":
+            return VerificationCheckResult(
+                self.name,
+                False,
+                "Receipt lifecycle did not transition from stale state back to open",
+                {"previous_status": previous_status, "final_status": final_status},
+            )
+        if address_reused is not True or reopened is not True or guarded_lifecycle is True:
+            return VerificationCheckResult(
+                self.name,
+                False,
+                "Level 5 requires the stale receipt PDA address to be reused and reopened",
+                {
+                    "address_reused": address_reused,
+                    "reopened": reopened,
+                    "guarded_lifecycle": guarded_lifecycle,
+                },
+            )
+
+        return VerificationCheckResult(
+            self.name,
+            True,
+            "Address reuse lifecycle proof accepted",
+            {
+                "receipt_pda": receipt_pda,
+                "order_id": order_id,
+                "previous_status": previous_status,
+                "final_status": final_status,
+            },
+        )
+
+
 class AuthorityStrategy:
     name = "authority"
 
@@ -344,6 +531,8 @@ class VerificationEngine:
             TokenBalanceStrategy(),
             PDACommanderHijackStrategy(),
             DelegatedCPIExploitStrategy(),
+            DataMatchingExploitStrategy(),
+            AddressReuseLifecycleStrategy(),
             AuthorityStrategy(),
         ]
         self._strategies = {

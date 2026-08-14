@@ -7,8 +7,16 @@ from app.core.dependencies.blockchain import get_blockchain_client
 from app.modules.analytics.infrastructure.repositories.sqlalchemy_analytics_repository import (
     SQLAlchemyAnalyticsRepository,
 )
+from app.modules.badges.application.use_cases.badges import EvaluateUserBadgesUseCase
+from app.modules.badges.infrastructure.repositories.sqlalchemy_badge_repository import (
+    SQLAlchemyBadgeRepository,
+)
 from app.modules.certifications.infrastructure.repositories import (
     sqlalchemy_certification_repository,
+)
+from app.modules.certifications.domain.certificate_definitions import (
+    CERTIFICATE_DEFINITIONS,
+    LEVEL_ORDER_TO_CERTIFICATE_ID,
 )
 from app.modules.certifications.presentation.schemas.certification import CertificationResponse
 from app.modules.levels.application.use_cases.create_level import CreateLevelUseCase
@@ -108,6 +116,26 @@ def _execution_metadata(level: Level) -> LevelExecutionMetadata | None:
         submit_proof_fields=["transaction_signature", "wallet_address", "level_session_id"],
         execution_mode=str(execution.get("mode", "wallet_signed_demo_transaction")),
     )
+
+
+def _certification_status(level: Level, completed: bool) -> dict | None:
+    certificate_id = LEVEL_ORDER_TO_CERTIFICATE_ID.get(level.order)
+    if certificate_id is None:
+        return None
+    definition = CERTIFICATE_DEFINITIONS[certificate_id]
+    return {
+        "slug": definition.certificate_id,
+        "title": definition.title,
+        "unlock_status": "unlocked" if completed else "locked",
+        "mint_status": "available" if completed else "locked",
+        "metadata": {
+            "certificate_id": definition.certificate_id,
+            "level": definition.level,
+            "completed_level_order": level.order,
+            "vulnerability_family": level.vulnerability_category,
+            "minting_enabled": completed,
+        },
+    }
 
 
 @router.get(
@@ -225,6 +253,12 @@ async def start_level(
         state=result.state.value,
         session=_session_response(result.session),
         execution=_execution_metadata(result.level),
+        level_id=result.level.id,
+        level_session_id=result.session.id,
+        exploit_status=result.session.exploit_status.value,
+        challenge_context=result.session.challenge_context,
+        challenge=result.session.challenge_context,
+        certification=_certification_status(result.level, False),
     )
 
 
@@ -311,6 +345,7 @@ async def get_level_status(
         else None
     )
     return LevelStatusResponse(
+        level_id=result.level.id,
         level=_level_response(result.level),
         state=result.state.value,
         unlock_status="unlocked" if result.state.value != "locked" else "locked",
@@ -326,7 +361,9 @@ async def get_level_status(
         xp_earned=result.progress.xp_awarded if result.progress else 0,
         next_level_id=result.next_level_id,
         exploit_status=result.session.exploit_status.value if result.session else None,
+        level_session_id=result.session.id if result.session else None,
         challenge_context=result.session.challenge_context if result.session else {},
+        certification=_certification_status(result.level, result.progress is not None),
     )
 
 
@@ -381,6 +418,12 @@ async def submit_level(
         events=InMemoryEventPublisher(),
         blockchain=blockchain,
     ).execute(current_user.id, level_id, payload.to_proof())
+    analytics = SQLAlchemyAnalyticsRepository(session)
+    if result.progress is not None:
+        await EvaluateUserBadgesUseCase(
+            SQLAlchemyBadgeRepository(session),
+            analytics,
+        ).earn_for_completed_level(current_user, result.level.order)
     await SQLAlchemyAnalyticsRepository(session).record(
         event_type=(
             "level_submission_verified"

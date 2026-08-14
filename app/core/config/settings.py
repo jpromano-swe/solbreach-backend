@@ -1,7 +1,7 @@
 from functools import lru_cache
 from typing import Annotated, Any, Literal
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
@@ -10,6 +10,10 @@ class Settings(BaseSettings):
     environment: Literal["local", "dev","test", "staging", "production"] = "local"
     api_v1_prefix: str = "/api/v1"
     debug: bool = False
+    app_base_url: str = Field(
+        default="https://beta.solbreach.com",
+        validation_alias=AliasChoices("APP_BASE_URL", "FRONTEND_URL"),
+    )
 
     database_url: str = Field(
         default="postgresql+asyncpg://solbreach:solbreach@postgres:5432/solbreach",
@@ -28,6 +32,9 @@ class Settings(BaseSettings):
             "http://localhost:3000",
             "http://127.0.0.1:3000",
             "http://localhost:5173",
+            "https://solbreach.com",
+            "https://www.solbreach.com",
+            "https://beta.solbreach.com",
             "https://solbreach.vercel.app",
         ],
         validation_alias="CORS_ALLOWED_ORIGINS",
@@ -56,6 +63,18 @@ class Settings(BaseSettings):
         default=100_000,
         validation_alias="RESEARCH_LAB_MAX_FILE_SIZE_BYTES",
     )
+    breach_rooms_github_repo: str = Field(
+        default="jpromano-swe/solbreach-breachrooms",
+        validation_alias="BREACH_ROOMS_GITHUB_REPO",
+    )
+    breach_rooms_github_base_branch: str = Field(
+        default="main",
+        validation_alias="BREACH_ROOMS_GITHUB_BASE_BRANCH",
+    )
+    breach_rooms_github_token: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("BREACH_ROOMS_GITHUB_TOKEN", "GITHUB_TOKEN"),
+    )
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -72,6 +91,7 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_production_cors(self) -> "Settings":
+        self.app_base_url = self.app_base_url.rstrip("/")
         if self.environment == "production" and "*" in self.cors_origins:
             raise ValueError("CORS wildcard origins are not allowed in production")
         return self
