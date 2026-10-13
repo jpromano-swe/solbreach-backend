@@ -22,11 +22,13 @@ provider:
     JWT_SECRET_KEY: ${env:JWT_SECRET_KEY, ''}
     CORS_ALLOWED_ORIGINS: ${env:CORS_ALLOWED_ORIGINS, ''}
     SOLANA_DEVNET_RPC_URL: ${env:SOLANA_DEVNET_RPC_URL, ''}
-    RESEARCH_LAB_TEMPLATE_ROOT: ${env:RESEARCH_LAB_TEMPLATE_ROOT, ''}
+    RESEARCH_LAB_TEMPLATE_ROOT: ${env:RESEARCH_LAB_TEMPLATE_ROOT, 'lab_templates'}
     RESEARCH_LAB_WORKSPACE_ROOT: ${env:RESEARCH_LAB_WORKSPACE_ROOT, '/tmp/solbreach_research_labs'}
     RESEARCH_LAB_SESSION_TTL_HOURS: ${env:RESEARCH_LAB_SESSION_TTL_HOURS, '4'}
     RESEARCH_LAB_TEST_TIMEOUT_SECONDS: ${env:RESEARCH_LAB_TEST_TIMEOUT_SECONDS, '120'}
     RESEARCH_LAB_MAX_FILE_SIZE_BYTES: ${env:RESEARCH_LAB_MAX_FILE_SIZE_BYTES, '100000'}
+    DEPLOY_VERSION: ${env:DEPLOY_VERSION, 'coldstart-20260528-001'}
+    DEPLOY_COMMIT_SHA: ${env:DEPLOY_COMMIT_SHA, ''}
   apiGateway:
     binaryMediaTypes:
       - "multipart/form-data"
@@ -42,7 +44,7 @@ plugins:
 custom:
   pythonRequirements:
     dockerizePip: true
-    usePoetry: true
+    usePoetry: false
     slim: false
     strip: false
     layer: false
@@ -52,8 +54,15 @@ custom:
 package:
   individually: true
   patterns:
+    - "!lab_templates/**"
+    - "lab_templates/research-labs/treasury-mirage@v1/Cargo.toml"
+    - "lab_templates/research-labs/treasury-mirage@v1/programs/**"
+    - "lab_templates/research-labs/treasury-mirage@v1/treasury_mirage.json"
+    - "lab_templates/research-labs/treasury-mirage@v1/treasury_mirage.so"
     - "!**/*.pyc"
     - "!**/__pycache__/**"
+    - "!node_modules/**"
+    - "!.venv/**"
     - "!**/.git/**"
     - "!**/tests/**"
     - "!**/test_*.py"
@@ -62,7 +71,7 @@ package:
     - "!.env*"
     - "!*.md"
     - "!docs/**"
-    - "!lab_templates/**"
+    # Only runtime-safe lab artifacts are included; nested template build output is excluded.
     - "!alembic/versions/**"
     - "!scripts/**"
 

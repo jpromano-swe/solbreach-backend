@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Any, Protocol
 
 
 @dataclass(slots=True)
@@ -43,12 +43,41 @@ class SandboxAccountSnapshot:
 
 
 @dataclass(slots=True)
+class SandboxExplorerSnapshot:
+    session_id: str
+    network: dict
+    program: dict
+    accounts: list[dict]
+    participants: list[dict] = field(default_factory=list)
+    reward_candidates: list[dict] = field(default_factory=list)
+    reward_asset: dict | None = None
+    total_rewards_paid: int = 0
+    protocol_state: dict = field(default_factory=dict)
+    enabled: bool = True
+    reason: str | None = None
+
+
+@dataclass(slots=True)
 class SandboxTransactionResult:
     transaction_ref: str
     instruction_type: str
     execution_status: str
     logs: list[str] = field(default_factory=list)
-    user_facing_evidence: list[str] = field(default_factory=list)
+    account_deltas: list[dict] = field(default_factory=list)
+    protocol_state: dict = field(default_factory=dict)
+    user_facing_evidence: list[Any] = field(default_factory=list)
+
+
+def resolve_lab_template_ref(template_ref: str) -> str:
+    if template_ref == "research-labs/account-substitution@v1":
+        return "research-labs/treasury-mirage@v1"
+    return template_ref
+
+
+def resolve_lab_file_path(path: str) -> str:
+    if path == "programs/account_substitution/src/lib.rs":
+        return "programs/treasury_mirage/src/lib.rs"
+    return path
 
 
 @dataclass(slots=True)
@@ -56,7 +85,9 @@ class SandboxVerificationResult:
     objective_ref: str
     passed: bool
     evidence: dict
-    user_facing_evidence: list[str] = field(default_factory=list)
+    verified_evidence_refs: list[str] = field(default_factory=list)
+    failure_reason: str | None = None
+    user_facing_evidence: list[Any] = field(default_factory=list)
 
 
 class SandboxRuntime(Protocol):
@@ -81,6 +112,8 @@ class SandboxRuntime(Protocol):
     async def get_account_state(
         self, session_id: str, account_ref: str
     ) -> SandboxAccountSnapshot: ...
+
+    async def get_explorer_snapshot(self, session_id: str) -> SandboxExplorerSnapshot: ...
 
     async def submit_transaction(
         self, session_id: str, action_type: str, parameters: dict

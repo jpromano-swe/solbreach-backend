@@ -1,5 +1,6 @@
 import os
 from collections.abc import AsyncGenerator
+from typing import Any
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -43,7 +44,20 @@ async def seeded_client() -> AsyncGenerator[AsyncClient, None]:
         yield test_client
 
 
+@pytest.fixture()
+async def client_with_session_factory() -> AsyncGenerator[tuple[AsyncClient, Any], None]:
+    async for test_client, session_factory in _build_client_with_session_factory(seed=False):
+        yield test_client, session_factory
+
+
 async def _build_client(seed: bool) -> AsyncGenerator[AsyncClient, None]:
+    async for test_client, _ in _build_client_with_session_factory(seed=seed):
+        yield test_client
+
+
+async def _build_client_with_session_factory(
+    seed: bool,
+) -> AsyncGenerator[tuple[AsyncClient, Any], None]:
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     session_factory = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
 
@@ -65,6 +79,6 @@ async def _build_client(seed: bool) -> AsyncGenerator[AsyncClient, None]:
         transport=ASGITransport(app=app),
         base_url="http://testserver",
     ) as test_client:
-        yield test_client
+        yield test_client, session_factory
 
     await engine.dispose()

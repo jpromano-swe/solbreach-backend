@@ -26,6 +26,11 @@ class SQLAlchemyCertificationRepository(CertificationRepository):
             metadata_json=certification.metadata,
             unlock_status=certification.unlock_status.value,
             mint_status=certification.mint_status.value,
+            wallet_address=certification.wallet_address,
+            asset_id=certification.asset_id,
+            certificate_pda=certification.certificate_pda,
+            metadata_uri=certification.metadata_uri,
+            minted_at=certification.minted_at,
             unlocked_at=certification.unlocked_at,
         )
         self._session.add(model)
@@ -53,6 +58,14 @@ class SQLAlchemyCertificationRepository(CertificationRepository):
         )
         return [self._to_entity(model) for model in result.scalars().all()]
 
+    async def list_all_for_user(self, user_id: str) -> list[Certification]:
+        result = await self._session.execute(
+            select(CertificationModel)
+            .where(CertificationModel.user_id == user_id)
+            .order_by(CertificationModel.created_at.asc())
+        )
+        return [self._to_entity(model) for model in result.scalars().all()]
+
     @staticmethod
     def _to_entity(model: CertificationModel) -> Certification:
         return Certification(
@@ -64,6 +77,11 @@ class SQLAlchemyCertificationRepository(CertificationRepository):
             metadata=model.metadata_json,
             unlock_status=CertificationUnlockStatus(model.unlock_status),
             mint_status=CertificationMintStatus(model.mint_status),
+            wallet_address=model.wallet_address,
+            asset_id=model.asset_id,
+            certificate_pda=model.certificate_pda,
+            metadata_uri=model.metadata_uri,
+            minted_at=model.minted_at,
             unlocked_at=model.unlocked_at,
             created_at=model.created_at,
             updated_at=model.updated_at,

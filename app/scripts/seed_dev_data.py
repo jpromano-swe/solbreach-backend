@@ -7,6 +7,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database.session import AsyncSessionLocal
 from app.core.security.password import PasswordHasher
+from app.modules.beta_access.application.use_cases.beta_access import hash_access_code
+from app.modules.beta_access.infrastructure.database.models import BetaAccessCodeModel
 from app.modules.levels.domain.entities.level import LevelStage
 from app.modules.levels.infrastructure.database.models import LevelModel
 from app.modules.users.domain.entities.user import UserRole
@@ -307,6 +309,7 @@ def stable_id(slug: str) -> str:
 
 async def seed_development_data(session: AsyncSession) -> None:
     await seed_admin_user(session)
+    await seed_beta_access_codes(session)
     vulnerability_ids: dict[str, str] = {}
     for item in VULNERABILITIES:
         existing = await session.scalar(
@@ -365,6 +368,36 @@ async def seed_development_data(session: AsyncSession) -> None:
                 if key != "id":
                     setattr(existing, key, value)
     await session.commit()
+
+
+async def seed_beta_access_codes(session: AsyncSession) -> None:
+    raw_codes = os.getenv("BETA_ACCESS_CODES", "")
+    codes = [code.strip() for code in raw_codes.split(",") if code.strip()]
+    if not codes:
+        return
+
+    max_redemptions = int(os.getenv("BETA_ACCESS_CODE_MAX_REDEMPTIONS", "100"))
+    for code in codes:
+        code_hash = hash_access_code(code)
+        existing = await session.scalar(
+            select(BetaAccessCodeModel).where(BetaAccessCodeModel.code_hash == code_hash)
+        )
+        if existing is None:
+            session.add(
+                BetaAccessCodeModel(
+                    id=stable_id(f"beta-access-code:{code_hash}"),
+                    code_hash=code_hash,
+                    label="local-dev",
+                    status="active",
+                    max_redemptions=max_redemptions,
+                    redemption_count=0,
+                    expires_at=None,
+                )
+            )
+        else:
+            existing.status = "active"
+            existing.max_redemptions = max_redemptions
+    await session.flush()
 
 
 async def seed_admin_user(session: AsyncSession) -> None:

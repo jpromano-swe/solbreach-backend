@@ -21,4 +21,18 @@ class CertificationModel(UUIDTimestampMixin, Base):
     mint_status: Mapped[str] = mapped_column(
         String(30), default="not_minted", index=True, nullable=False
     )
+    wallet_address: Mapped[str | None] = mapped_column(String(64), index=True)
+    asset_id: Mapped[str | None] = mapped_column(String(128), index=True)
+    certificate_pda: Mapped[str | None] = mapped_column(String(128), index=True)
+    metadata_uri: Mapped[str | None] = mapped_column(String(500))
+    minted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     unlocked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class CertificateMintAuthorizationModel(UUIDTimestampMixin, Base):
+    """Consumed wallet authorizations; shared across API workers and restarts."""
+
+    __tablename__ = "certificate_mint_authorizations"
+
+    nonce: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    wallet_address: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
