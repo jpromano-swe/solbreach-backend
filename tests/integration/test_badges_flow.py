@@ -83,6 +83,11 @@ async def test_badges_me_returns_all_slots_and_seen_is_guarded(
     seen = await seeded_client.post("/api/v1/badges/level-1-illusionist/seen", headers=headers)
     assert seen.status_code == 409
 
+    manual_seen = await seeded_client.post(
+        "/api/v1/badges/level-2-identity-thief/seen", headers=headers
+    )
+    assert manual_seen.status_code == 409
+
 
 async def test_level_badges_do_not_award_power_user(
     seeded_client: AsyncClient,
@@ -140,12 +145,31 @@ async def test_level_badges_do_not_award_power_user(
     earned = {badge["slug"]: badge for badge in body["badges"] if badge["earned"]}
     assert set(earned) == {
         "level-1-illusionist",
-        "level-2-identity-thief",
         "level-3-trojan-horse",
     }
+    level_2_badge = next(
+        badge for badge in body["badges"] if badge["slug"] == "level-2-identity-thief"
+    )
+    assert level_2_badge["earned"] is False
+    assert level_2_badge["seenAt"] is None
     power_user = next(badge for badge in body["badges"] if badge["slug"] == "power-user")
     assert power_user["earned"] is False
     assert power_user["seenAt"] is None
+    assert body["summary"] == {"earned": 2, "total": 4, "powerUserEarned": False}
+
+    level_2_seen = await seeded_client.post(
+        "/api/v1/badges/level-2-identity-thief/seen", headers=headers
+    )
+    assert level_2_seen.status_code == 200
+    assert level_2_seen.json()["seenAt"] is not None
+
+    body = (await seeded_client.get("/api/v1/badges/me", headers=headers)).json()
+    earned = {badge["slug"]: badge for badge in body["badges"] if badge["earned"]}
+    assert set(earned) == {
+        "level-1-illusionist",
+        "level-2-identity-thief",
+        "level-3-trojan-horse",
+    }
     assert body["summary"] == {"earned": 3, "total": 4, "powerUserEarned": False}
 
     power_user_seen = await seeded_client.post("/api/v1/badges/power-user/seen", headers=headers)

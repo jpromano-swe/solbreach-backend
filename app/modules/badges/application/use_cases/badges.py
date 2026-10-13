@@ -11,6 +11,7 @@ from app.modules.badges.domain.badge_definitions import (
     BADGE_DEFINITIONS,
     BADGE_ORDER,
     LEVEL_1_BADGE,
+    LEVEL_2_BADGE,
     LEVEL_ORDER_TO_BADGE,
     POWER_USER_BADGE,
     BadgeDefinition,
@@ -22,6 +23,7 @@ from app.modules.badges.infrastructure.repositories.sqlalchemy_badge_repository 
 from app.modules.users.domain.entities.user import User
 
 RL1_ACCOUNT_SUBSTITUTION_ID = "rl1-account-substitution"
+MANUALLY_COLLECTED_LEVEL_BADGES = {LEVEL_2_BADGE}
 
 
 @dataclass(slots=True)
@@ -96,7 +98,7 @@ class EvaluateUserBadgesUseCase:
         completed_orders = await self._badges.completed_level_orders(user.id)
         for order in sorted(completed_orders):
             slug = LEVEL_ORDER_TO_BADGE.get(order)
-            if slug is not None:
+            if slug is not None and slug not in MANUALLY_COLLECTED_LEVEL_BADGES:
                 results.append(
                     await self._earn.execute(
                         user,
@@ -127,7 +129,7 @@ class EvaluateUserBadgesUseCase:
 
     async def earn_for_completed_level(self, user: User, level_order: int) -> list[EarnBadgeResult]:
         slug = LEVEL_ORDER_TO_BADGE.get(level_order)
-        if slug is None:
+        if slug is None or slug in MANUALLY_COLLECTED_LEVEL_BADGES:
             return []
         results = [
             await self._earn.execute(
@@ -200,10 +202,26 @@ class MarkBadgeSeenUseCase:
         self._analytics = analytics
 
     async def execute(self, user: User, slug: str) -> dict:
-        _definition(slug)
+        definition = _definition(slug)
         badge = await self._badges.get_for_user_slug(user.id, slug)
         if badge is None or not badge.earned:
-            raise ConflictError("Badge has not been earned")
+            if slug not in MANUALLY_COLLECTED_LEVEL_BADGES or definition.level_order is None:
+                raise ConflictError("Badge has not been earned")
+
+            completed_orders = await self._badges.completed_level_orders(user.id)
+            if definition.level_order not in completed_orders:
+                raise ConflictError("Badge has not been earned")
+
+            badge = (
+                await EarnBadgeUseCase(self._badges, self._analytics).execute(
+                    user,
+                    slug,
+                    metadata={
+                        "source": "manual_badge_collection",
+                        "levelOrder": definition.level_order,
+                    },
+                )
+            ).badge
         if slug == POWER_USER_BADGE and not await self._badges.has_completed_research_lab(
             user.id, RL1_ACCOUNT_SUBSTITUTION_ID
         ):

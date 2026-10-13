@@ -48,7 +48,10 @@ BADGE_DEFINITIONS: dict[str, BadgeDefinition] = {
     POWER_USER_BADGE: BadgeDefinition(
         slug=POWER_USER_BADGE,
         title="Power User",
-        description="Earned by collecting all core vulnerability badges.",
+        description=(
+            "Earned by completing Research Lab 1: Account Substitution, "
+            "when the RL1 certificate is awarded."
+        ),
         image="/badges/badge-poweruser.png",
         kind="super_badge",
     ),
