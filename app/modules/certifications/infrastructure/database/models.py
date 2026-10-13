@@ -27,3 +27,12 @@ class CertificationModel(UUIDTimestampMixin, Base):
     metadata_uri: Mapped[str | None] = mapped_column(String(500))
     minted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     unlocked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class CertificateMintAuthorizationModel(UUIDTimestampMixin, Base):
+    """Consumed wallet authorizations; shared across API workers and restarts."""
+
+    __tablename__ = "certificate_mint_authorizations"
+
+    nonce: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    wallet_address: Mapped[str] = mapped_column(String(64), index=True, nullable=False)

@@ -4,7 +4,7 @@ Async FastAPI backend for SolBreach, structured as a modular monolith with hexag
 
 ## Stack
 
-- Python 3.12+
+- Python 3.11+
 - FastAPI 0.136.1
 - PostgreSQL
 - SQLAlchemy 2.0 async
@@ -74,9 +74,10 @@ GET  /api/v1/levels/{level_id}/status
 POST /api/v1/levels/{level_id}/submit
 ```
 
-Submissions are verified deterministically from proof payloads against each level's
-`verification_config`. The backend does not execute user code, run uploaded scripts, deploy
-validators, or orchestrate sandboxes.
+Guided level submissions use configured proof and transaction checks. Research Labs
+have separate runtimes: RL1 includes an optional LiteSVM adapter, while other lab flows
+include deterministic modeled state transitions. These are not a general uploaded-code
+verification service, and modeled results must not be presented as devnet transactions.
 
 Successful verification:
 
@@ -84,11 +85,32 @@ Successful verification:
 - records the verified submission
 - awards XP once for that level
 - unlocks the next sequential level
-- unlocks the next sequential level
 
 ## Verification
 
 ```bash
 poetry run pytest
 poetry run ruff check .
+```
+
+
+## Certificate mint authorization — 2026-10-12
+
+Run `poetry run alembic upgrade head` before deploying the matching frontend.
+Migration `202610120001` adds persisted nonce consumption and wallet attempt records.
+
+`POST /api/v1/certificates/mint-authorization` requires a bearer session, its linked
+wallet, and an Ed25519 signed message containing the recipient, level, devnet,
+issued-at timestamp and nonce. Authorization expires after five minutes; nonces are
+single-use. PostgreSQL row locking serializes attempts across workers, with a limit
+of five per wallet per ten minutes. Wallet authorization does **not** establish level
+completion: the frontend mint server separately verifies backend completion or the
+program-owned on-chain certificate PDA before using its server authority.
+
+The Next.js mint server owns RPC/tree configuration and restricts minting to devnet.
+Deploy this backend first, then the frontend. No user interview counts, partnerships
+or paid usage claims are inferred from source code.
+
+```bash
+poetry run pytest tests/integration/test_mint_authorization.py tests/integration/test_certificates_flow.py
 ```

@@ -7,7 +7,10 @@ from app.modules.beta_access.infrastructure.database.models import (
     BetaAccessGrantModel,
     BetaAccessRequestModel,
 )
-from app.modules.certifications.infrastructure.database.models import CertificationModel
+from app.modules.certifications.infrastructure.database.models import (
+    CertificateMintAuthorizationModel,
+    CertificationModel,
+)
 from app.modules.labs.infrastructure.database.models import (
     LabModel,
     ResearchLabCompletionModel,
@@ -29,6 +32,7 @@ from app.modules.waitlist.infrastructure.database.models import WaitlistEntryMod
 
 __all__ = [
     "CertificationModel",
+    "CertificateMintAuthorizationModel",
     "AnalyticsEventModel",
     "WalletAuthNonceModel",
     "UserBadgeModel",
